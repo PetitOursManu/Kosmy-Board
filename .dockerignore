@@ -1,0 +1,7 @@
+.git
+.claude
+data
+test
+node_modules
+*.md
+!README.md

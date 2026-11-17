@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kosmy Board — vos espaces admin</title>
+  <meta name="description" content="Kosmy Board : les panneaux d'administration de vos instances auto-hébergées, au même endroit.">
+  <meta name="theme-color" content="#0d0c0a">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="assets/kosmy-logo.webp" type="image/webp">
+  <link rel="apple-touch-icon" href="assets/kosmy-logo.webp">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="top-start">
+      <a class="brand" href="#/" id="brand" aria-label="Kosmy Board, accueil">
+        <span class="mark"><img src="assets/kosmy-logo.webp" alt="" width="34" height="34"></span>
+        <span class="serif"><span class="wm">Kosmy </span><em>Board</em></span>
+      </a>
+      <a class="mono back-kosmy" id="kosmy-link" href="#" hidden>← Kosmy</a>
+    </div>
+    <div class="top-end">
+      <span class="mono status" id="top-status" hidden><span class="dot"></span> <span class="status-text"></span></span>
+      <div class="lang mono" role="group" id="lang" aria-label="Langue">
+        <button class="lang-btn" type="button" data-lang="fr" aria-pressed="true" lang="fr">FR</button>
+        <button class="lang-btn" type="button" data-lang="en" aria-pressed="false" lang="en">EN</button>
+      </div>
+      <a class="mono account-link" id="account-link" href="#/compte" hidden></a>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <p class="mono boot">Chargement…</p>
+  </main>
+
+  <footer class="foot">
+    <div class="mono foot-line">
+      <span id="foot-note"></span>
+      <a class="link" href="https://github.com/PetitOursManu/Kosmy-Board" target="_blank" rel="noopener noreferrer">github.com/PetitOursManu/Kosmy-Board ↗</a>
+    </div>
+    <div class="serif giant" aria-hidden="true">Board</div>
+  </footer>
+
+  <dialog class="confirm" id="confirm" aria-labelledby="confirm-title">
+    <form method="dialog">
+      <p class="mono confirm-kicker">Kosmy Board</p>
+      <h2 class="serif confirm-title" id="confirm-title"></h2>
+      <p class="confirm-text"></p>
+      <div class="confirm-actions">
+        <button class="btn ghost confirm-cancel" value="" type="submit"></button>
+        <button class="btn confirm-ok" value="ok" type="submit"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast mono" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
