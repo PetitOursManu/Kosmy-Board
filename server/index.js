@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { handleApi } from "./api.js";
 import { ensureSetupCode, purgeExpired } from "./auth.js";
 import { config } from "./config.js";
+import { handleOidc, purgeOidc } from "./oidc.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -24,7 +25,7 @@ const TYPES = {
 };
 
 /* Pas d'iframe, pas de script tiers. connect-src reste ouvert : le statut des instances est vérifié depuis le navigateur. */
-const CSP = [
+const CSP_BASE = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' https://fonts.googleapis.com",
@@ -34,12 +35,17 @@ const CSP = [
   "connect-src 'self' https: http:",
   "frame-ancestors 'none'",
   "base-uri 'none'",
-  "form-action 'self'",
   "object-src 'none'",
-].join("; ");
+];
+const CSP = [...CSP_BASE, "form-action 'self'"].join("; ");
+/*
+ * Connexion unique : les formulaires (refus, déconnexion, réponse form_post) se terminent par une redirection
+ * vers l'appli, que « form-action 'self' » bloquerait. oidc-provider ajoute lui-même l'empreinte de ses scripts.
+ */
+const CSP_OIDC = CSP_BASE.join("; ");
 
-function securityHeaders(res) {
-  res.setHeader("Content-Security-Policy", CSP);
+function securityHeaders(res, pathname) {
+  res.setHeader("Content-Security-Policy", pathname === "/oidc" || pathname.startsWith("/oidc/") ? CSP_OIDC : CSP);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
@@ -88,7 +94,6 @@ async function serveStatic(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
-  securityHeaders(res);
   let pathname;
   try {
     pathname = new URL(req.url, "http://board").pathname;
@@ -96,11 +101,18 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(400).end();
     return;
   }
+  securityHeaders(res, pathname);
   if (pathname === "/healthz") {
     res.writeHead(200, { "Content-Type": "text/plain" }).end("ok");
     return;
   }
   if (pathname.startsWith("/api/")) return handleApi(req, res, pathname);
+  if (pathname === "/oidc" || pathname.startsWith("/oidc/")) return handleOidc(req, res, pathname);
+  /* Certaines bibliothèques cherchent la découverte à la racine du domaine. */
+  if (pathname === "/.well-known/openid-configuration") {
+    res.writeHead(307, { Location: "/oidc/.well-known/openid-configuration" }).end();
+    return;
+  }
   serveStatic(req, res, pathname).catch((e) => {
     console.error(e);
     if (!res.headersSent) res.writeHead(500).end();
@@ -119,7 +131,11 @@ server.listen(config.port, () => {
   }
 });
 
-purgeExpired();
-setInterval(purgeExpired, 3_600_000).unref();
+const purge = () => {
+  purgeExpired();
+  purgeOidc();
+};
+purge();
+setInterval(purge, 3_600_000).unref();
 
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => server.close(() => process.exit(0)));

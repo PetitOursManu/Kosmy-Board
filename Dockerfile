@@ -1,4 +1,4 @@
-# Kosmy Board — image de production (aucune dépendance npm : Node 24 suffit)
+# Kosmy Board — image de production
 FROM node:24-alpine
 
 ENV NODE_ENV=production \
@@ -6,7 +6,8 @@ ENV NODE_ENV=production \
     DATA_DIR=/data
 
 WORKDIR /app
-COPY package.json ./
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 COPY server ./server
 COPY public ./public
 

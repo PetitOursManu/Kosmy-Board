@@ -1,4 +1,4 @@
-/* Connexion, première configuration et invitation. */
+/* Connexion (avec double authentification), première configuration et invitation. */
 import { api } from "../api.js";
 import { go, reloadState, route, state, titleHtml } from "../app.js";
 import { errorText, lang, setLang, initialLang, t } from "../i18n.js";
@@ -14,12 +14,26 @@ function field({ id, label, type = "text", autocomplete, hint, value = "", attrs
   </div>`;
 }
 
-export async function renderAuth(main, mode, inviteToken) {
+/** Connexion réussie : vers l'appli qui attendait (connexion unique), ou vers le Board. */
+async function signedIn(mode, back) {
+  const s = await reloadState();
+  setLang(initialLang(s.user?.lang));
+  if (back) location.replace(back);
+  else if (mode === "invite") go("#/");
+  else route();
+}
+
+/**
+ * mode : login, setup, invite, 2fa.
+ * opts.back : étape de connexion unique où revenir ; opts.app : nom de l'appli qui attend ; opts.ticket : étape du code.
+ */
+export async function renderAuth(main, mode, inviteToken, opts = {}) {
+  const { back = null, app = null } = opts;
   let inviteValid = true;
   if (mode === "invite") {
     inviteValid = await api.post("api/invites/check", { token: inviteToken }).then((r) => r.valid).catch(() => false);
   }
-  const k = { login: "login", setup: "setup", invite: "invite" }[mode];
+  const k = { login: "login", setup: "setup", invite: "invite", "2fa": "twoFactor" }[mode];
 
   let form;
   if (mode === "login") {
@@ -28,6 +42,11 @@ export async function renderAuth(main, mode, inviteToken) {
       ${field({ id: "password", label: t("password"), type: "password", autocomplete: "current-password", attrs: "required" })}
       <p class="error" id="form-error" role="alert" hidden></p>
       <button class="btn signal" type="submit">${esc(t("signIn"))}</button>`;
+  } else if (mode === "2fa") {
+    form = `
+      ${field({ id: "code", label: t("code"), autocomplete: "one-time-code", attrs: "required autofocus inputmode=\"numeric\" spellcheck=\"false\" autocapitalize=\"characters\" maxlength=\"12\"" })}
+      <p class="error" id="form-error" role="alert" hidden></p>
+      <button class="btn signal" type="submit">${esc(t("verify"))}</button>`;
   } else if (mode === "setup") {
     form = `
       ${field({ id: "code", label: t("setupCode"), autocomplete: "off", hint: t("setupCodeHint"), attrs: "required autofocus spellcheck=\"false\" autocapitalize=\"characters\"" })}
@@ -48,6 +67,8 @@ export async function renderAuth(main, mode, inviteToken) {
       <a class="btn ghost" href="#/" style="margin-top:28px">${esc(t("toLogin"))}</a>`;
   }
 
+  const waiting = app && (mode === "login" || mode === "2fa") ? `<p class="mono kicker continue">${esc(t("continueTo", app))}</p>` : "";
+
   main.innerHTML = `
     <section class="page auth">
       <div>
@@ -55,7 +76,7 @@ export async function renderAuth(main, mode, inviteToken) {
         <h1 class="serif page-title">${titleHtml(t(`${k}Title`))}</h1>
         <p class="lead fade" style="--d:.4s;margin-top:32px">${esc(t(`${k}Text`))}</p>
       </div>
-      <form class="auth-form fade" style="--d:.25s" novalidate>${form}</form>
+      <form class="auth-form fade" style="--d:.25s" novalidate>${waiting}${form}</form>
     </section>`;
 
   const el = $("form", main);
@@ -68,23 +89,32 @@ export async function renderAuth(main, mode, inviteToken) {
     const button = $("button[type=submit]", el);
     const restore = busy(button, t("signingIn"));
     try {
-      if (mode === "login") await api.post("api/login", { email: data.email, password: data.password });
-      else if (mode === "setup") await api.post("api/setup", { ...data, lang });
-      else await api.post("api/invites/accept", { ...data, token: inviteToken, lang });
-      const s = await reloadState();
-      setLang(initialLang(s.user?.lang));
-      if (mode === "invite") go("#/");
-      else route();
+      if (mode === "login") {
+        const r = await api.post("api/login", { email: data.email, password: data.password });
+        if (r.twoFactor) return renderAuth(main, "2fa", null, { ...opts, ticket: r.ticket });
+      } else if (mode === "2fa") {
+        await api.post("api/login/2fa", { ticket: opts.ticket, code: data.code });
+      } else if (mode === "setup") {
+        await api.post("api/setup", { ...data, lang });
+      } else {
+        await api.post("api/invites/accept", { ...data, token: inviteToken, lang });
+      }
+      await signedIn(mode, back);
     } catch (ex) {
       restore();
       if (ex.code === "already_setup") {
         state.setupNeeded = false;
-        return renderAuth(main, "login");
+        return renderAuth(main, "login", null, opts);
       }
+      if (ex.code === "ticket") return renderAuth(main, "login", null, { back, app });
       err.textContent = errorText(ex.code, ex.extra);
       err.hidden = false;
-      const focus = { setup_code: "code", email: "email", email_taken: "email", name: "name", password_short: "password", login_failed: "password" }[ex.code];
-      if (focus) $(`#${focus}`, el)?.focus();
+      const focus = { setup_code: "code", code: "code", email: "email", email_taken: "email", name: "name", password_short: "password", login_failed: "password" }[ex.code];
+      const input = focus && $(`#${focus}`, el);
+      if (input) {
+        input.focus();
+        if (ex.code === "code") input.select();
+      }
     }
   });
 }

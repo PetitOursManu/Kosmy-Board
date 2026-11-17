@@ -68,7 +68,7 @@ export function currentUser(req) {
   if (!raw || raw.length > 100) return null;
   const idHash = sha256(raw);
   const row = db.prepare(
-    `SELECT s.expires_at, s.seen_at, u.id, u.email, u.name, u.role, u.lang
+    `SELECT s.expires_at, s.seen_at, u.id, u.email, u.name, u.role, u.lang, u.totp_secret IS NOT NULL AS totp
        FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = ?`,
   ).get(idHash);
   if (!row) return null;
@@ -80,7 +80,7 @@ export function currentUser(req) {
   if (now - row.seen_at > DAY) {
     db.prepare("UPDATE sessions SET seen_at = ?, expires_at = ? WHERE id_hash = ?").run(now, now + config.sessionDays * DAY, idHash);
   }
-  return { id: row.id, email: row.email, name: row.name, role: row.role, lang: row.lang, sessionHash: idHash };
+  return { id: row.id, email: row.email, name: row.name, role: row.role, lang: row.lang, totp: Boolean(row.totp), sessionHash: idHash };
 }
 
 export function destroySession(req, res) {

@@ -12,5 +12,13 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "oidc-provider": "9.13.3",
+    "qrcode": "1.5.4",
+    "jose": "6.2.14"
+  },
+  "overrides": {
+    "jose": "6.2.14"
   }
 }

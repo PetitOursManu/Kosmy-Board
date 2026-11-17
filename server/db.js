@@ -49,7 +49,52 @@ const MIGRATIONS = [
     PRIMARY KEY (user_id, id)
   );
   `,
+  /* v2 : connexion unique (OpenID Connect) et double authentification. */
+  `
+  CREATE TABLE meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  CREATE TABLE oidc_store (
+    model TEXT NOT NULL,
+    id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    grant_id TEXT,
+    user_code TEXT,
+    uid TEXT,
+    expires_at INTEGER,
+    consumed_at INTEGER,
+    PRIMARY KEY (model, id)
+  );
+  CREATE INDEX oidc_store_grant ON oidc_store(grant_id);
+  CREATE INDEX oidc_store_uid ON oidc_store(model, uid);
+  CREATE INDEX oidc_store_expires ON oidc_store(expires_at);
+  CREATE TABLE sso_clients (
+    client_id TEXT PRIMARY KEY,
+    base TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    app_id TEXT,
+    secret TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    initiate_login_uri TEXT,
+    auth_method TEXT NOT NULL DEFAULT 'client_secret_basic',
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    secret_at INTEGER NOT NULL
+  );
+  ALTER TABLE spaces ADD COLUMN client_id TEXT REFERENCES sso_clients(client_id) ON DELETE SET NULL;
+  ALTER TABLE users ADD COLUMN totp_secret TEXT;
+  ALTER TABLE users ADD COLUMN totp_pending TEXT;
+  ALTER TABLE users ADD COLUMN totp_last_step INTEGER;
+  ALTER TABLE users ADD COLUMN recovery_codes TEXT;
+  `,
 ];
+
+/** Petites valeurs persistantes (clés de signature, secrets des cookies). */
+export const meta = {
+  get: (key) => db.prepare("SELECT value FROM meta WHERE key = ?").get(key)?.value ?? null,
+  set: (key, value) => db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value),
+};
 
 const { user_version: version } = db.prepare("PRAGMA user_version").get();
 for (let v = version; v < MIGRATIONS.length; v++) {

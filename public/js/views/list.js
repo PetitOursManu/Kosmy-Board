@@ -11,6 +11,17 @@ let theme = "all";
 
 const appOf = (s) => (s.appId ? state.catalog?.appById[s.appId] : undefined);
 const themeOf = (s) => appOf(s)?.theme ?? "other";
+/**
+ * Adresse ouverte par « Ouvrir ». Avec la connexion unique et une adresse de lancement, l'appli démarre elle-même
+ * la connexion avec le Board (OpenID Connect, connexion initiée par un tiers), puis arrive sur sa page d'admin.
+ */
+function openUrl(s) {
+  if (!s.sso?.loginUri || !state.config.issuer) return spaceUrl(s);
+  const u = new URL(s.sso.loginUri);
+  u.searchParams.set("iss", state.config.issuer);
+  u.searchParams.set("target_link_uri", spaceUrl(s));
+  return u.href;
+}
 /** Nom propre à chaque espace : l'onglet de l'instance est réutilisé à chaque ouverture. */
 const windowName = (s) => `kosmy-board-${s.id}`;
 
@@ -25,6 +36,7 @@ function rowHtml(s, i, animate) {
   const app = appOf(s);
   const { c, ink } = colorsOf(app);
   const url = spaceUrl(s);
+  const open = openUrl(s);
   const host = hostOf(s.base);
   const themeName = app ? state.catalog.themeById[app.theme]?.name[lang] : t("otherApp");
   const opened = s.openedAt ? t("openedAgo", relTime(s.openedAt)) : t("neverOpened");
@@ -32,16 +44,16 @@ function rowHtml(s, i, animate) {
   return `
     <article class="row${animate ? " enter" : ""}" style="--c:${c};--ink:${ink};--d:${Math.min(i, 8) * 0.06}s" data-id="${esc(s.id)}" data-url="${esc(url)}"
       data-search="${esc(`${s.name} ${host} ${app?.name ?? ""}`.toLowerCase())}" data-theme="${esc(themeOf(s))}">
-      <a class="cover" href="${esc(url)}" target="${target}" rel="noopener noreferrer" tabindex="-1" aria-hidden="true"></a>
+      <a class="cover" href="${esc(open)}" target="${target}" rel="noopener noreferrer" tabindex="-1" aria-hidden="true"></a>
       <span class="meta-l mono"><span class="n">${String(i + 1).padStart(2, "0")}</span>${stateHtml(url)}</span>
       ${logoTile(app, s.name)}
       <span class="title">
         <span class="name serif">${esc(s.name)}</span>
-        <span class="host mono"><span>${esc(host)}${s.path !== "/" ? esc(s.path) : ""}</span>${isCleartext(s.base) ? `<span class="tag-warn${isLocalHost(host) ? " local" : ""}" title="${esc(t(isLocalHost(host) ? "cleartextLocal" : "cleartextWarning"))}">${esc(t("cleartext"))}</span>` : ""}</span>
+        <span class="host mono"><span>${esc(host)}${s.path !== "/" ? esc(s.path) : ""}</span>${isCleartext(s.base) ? `<span class="tag-warn${isLocalHost(host) ? " local" : ""}" title="${esc(t(isLocalHost(host) ? "cleartextLocal" : "cleartextWarning"))}">${esc(t("cleartext"))}</span>` : ""}${s.sso ? `<span class="tag-sso">${esc(t("ssoTag"))}</span>` : ""}</span>
       </span>
       <span class="meta-r mono"><span class="opened">${esc(opened)}</span><span>${esc(themeName ?? "")}</span></span>
       <span class="actions mono">
-        <a class="open-btn" href="${esc(url)}" target="${target}" rel="noopener noreferrer" aria-label="${esc(t("openLabel", s.name, host))}">${esc(t("open"))} <span class="arrow" aria-hidden="true">↗</span></a>
+        <a class="open-btn" href="${esc(open)}" target="${target}" rel="noopener noreferrer" aria-label="${esc(t("openLabel", s.name, host))}">${esc(t("open"))} <span class="arrow" aria-hidden="true">↗</span></a>
         <a class="text-btn" href="#/modifier/${encodeURIComponent(s.id)}" aria-label="${esc(`${t("edit")} ${s.name}`)}">${esc(t("edit"))}</a>
         <button class="text-btn danger" type="button" data-remove aria-label="${esc(`${t("remove")} ${s.name}`)}">${esc(t("remove"))}</button>
       </span>
@@ -131,7 +143,7 @@ async function openSpace(s, e) {
   const plain = e && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.button === 0;
   if (plain) {
     e.preventDefault();
-    openInTab(spaceUrl(s), windowName(s));
+    openInTab(openUrl(s), windowName(s));
   }
   try {
     const { openedAt } = await api.post(`api/spaces/${encodeURIComponent(s.id)}/opened`);

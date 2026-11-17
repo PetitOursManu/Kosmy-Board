@@ -9,6 +9,7 @@ import { renderAuth } from "./views/auth.js";
 import { renderList } from "./views/list.js";
 import { renderEdit } from "./views/edit.js";
 import { renderAccount } from "./views/account.js";
+import { renderSso } from "./views/sso.js";
 
 /** État partagé par les vues. */
 export const state = {
@@ -101,7 +102,13 @@ export async function route() {
   firstRoute = false;
 
   if (parts[0] === "invitation" && parts[1]) return renderAuth(main, "invite", parts[1]);
-  if (!state.user) return renderAuth(main, state.setupNeeded ? "setup" : "login");
+  // Connexion unique : une appli attend que l'on soit connecté au Board, puis on y retourne.
+  const back = safeReturn(params.get("retour"));
+  if (!state.user) return renderAuth(main, state.setupNeeded ? "setup" : "login", null, { back, app: params.get("appli") });
+  if (back) {
+    location.replace(back);
+    return;
+  }
 
   await catalog().catch(() => null);
   if (!state.spaces) await refreshSpaces().catch(() => (state.spaces = []));
@@ -113,9 +120,16 @@ export async function route() {
       return renderEdit(main, { id: parts[1] });
     case "compte":
       return renderAccount(main);
+    case "connexion-unique":
+      return renderSso(main, { id: parts[1] });
     default:
       return renderList(main, { rerender: sameRoute });
   }
+}
+
+/** Seul retour accepté : une étape de connexion unique du Board lui-même. */
+export function safeReturn(v) {
+  return typeof v === "string" && /^\/oidc\/interaction\/[\w-]{1,64}$/.test(v) ? v : null;
 }
 
 /** Après connexion ou déconnexion : on relit l'état du serveur. */

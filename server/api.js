@@ -1,7 +1,9 @@
 /* Routes /api du Board. Toutes répondent en JSON. */
 import { randomBytes } from "node:crypto";
 
-import { normalizeBase, normalizePath } from "../public/js/normalize.js";
+import QRCode from "qrcode";
+
+import { isLocalHost, normalizeBase, normalizePath } from "../public/js/normalize.js";
 import {
   checkPassword, checkSetupCode, clearFailures, consumeSetupCode, createSession, currentUser, destroySession,
   dummyVerify, hashPassword, lockedFor, needsSetup, newUserId, recordFailure, sha256, token, verifyPassword,
@@ -9,6 +11,8 @@ import {
 import { config } from "./config.js";
 import { db, tx } from "./db.js";
 import { bad, clientIp, HttpError, readJson, sameOrigin, send } from "./http.js";
+import { ISSUER, provider } from "./oidc.js";
+import { newRecoveryCodes, newTotpSecret, normalizeRecovery, otpauthUri, verifyTotp } from "./totp.js";
 
 const DAY = 86_400_000;
 const INVITE_DAYS = 7;
@@ -45,11 +49,18 @@ function cleanSpace(raw) {
   return { appId, name, base: n.base, path };
 }
 
-const spaceOut = (r) => ({
+/** Format AdminSpace de Kosmy Mobile, plus la connexion unique (sso) pour le Board. */
+const spaceOut = (r, withSso = true) => ({
   id: r.id, appId: r.app_id, name: r.name, base: r.base, path: r.path, addedAt: r.added_at,
   ...(r.opened_at ? { openedAt: r.opened_at } : {}),
+  ...(withSso && r.client_id ? { sso: { loginUri: r.initiate_login_uri ?? null } } : {}),
 });
-const userOut = (u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, lang: u.lang ?? null });
+const SPACE_SELECT = "SELECT s.*, c.initiate_login_uri FROM spaces s LEFT JOIN sso_clients c ON c.client_id = s.client_id";
+const getSpace = (userId, id) => db.prepare(`${SPACE_SELECT} WHERE s.user_id = ? AND s.id = ?`).get(userId, id);
+const userOut = (u) => ({
+  id: u.id, email: u.email, name: u.name, role: u.role, lang: u.lang ?? null,
+  totp: Boolean(u.totp ?? u.totp_secret),
+});
 const newSpaceId = () => `${Date.now().toString(36)}${randomBytes(4).toString("hex").slice(0, 5)}`;
 
 /* ---------- Routes ---------- */
@@ -62,7 +73,7 @@ route("GET", /^\/api\/state$/, (req, res) => {
   send(res, 200, {
     setupNeeded: needsSetup(),
     user: user ? userOut(user) : null,
-    config: { kosmyUrl: config.kosmyUrl, catalogUrl: config.catalogUrl, publicUrl: config.publicUrl },
+    config: { kosmyUrl: config.kosmyUrl, catalogUrl: config.catalogUrl, publicUrl: config.publicUrl, issuer: ISSUER },
   });
 }, { auth: false });
 
@@ -105,7 +116,34 @@ route("POST", /^\/api\/login$/, async (req, res) => {
     throw new HttpError(401, "login_failed");
   }
   clearFailures(keys);
+  if (db.prepare("SELECT totp_secret FROM users WHERE id = ?").get(user.id).totp_secret) {
+    // Mot de passe correct, mais il faut encore le code de l'application d'authentification.
+    send(res, 200, { twoFactor: true, ticket: newTicket(user.id) });
+    return;
+  }
   createSession(res, user.id);
+  send(res, 200, { ok: true });
+}, { auth: false });
+
+route("POST", /^\/api\/login\/2fa$/, async (req, res) => {
+  const body = await readJson(req);
+  const key = String(body.ticket ?? "");
+  const ticket = tickets.get(key);
+  if (!ticket || ticket.exp < Date.now() || ticket.attempts >= 5) {
+    tickets.delete(key);
+    throw new HttpError(401, "ticket");
+  }
+  const keys = [`2fa:${ticket.userId}`];
+  const wait = lockedFor(keys);
+  if (wait) throw new HttpError(429, "locked", { wait });
+  ticket.attempts++;
+  if (!checkSecondFactor(ticket.userId, body.code)) {
+    recordFailure(keys);
+    throw bad("code");
+  }
+  tickets.delete(key);
+  clearFailures(keys);
+  createSession(res, ticket.userId);
   send(res, 200, { ok: true });
 }, { auth: false });
 
@@ -144,8 +182,8 @@ route("POST", /^\/api\/password$/, async (req, res, user) => {
 /* ---------- Espaces ---------- */
 
 route("GET", /^\/api\/spaces$/, (req, res, user) => {
-  const rows = db.prepare("SELECT * FROM spaces WHERE user_id = ? ORDER BY COALESCE(opened_at, added_at) DESC").all(user.id);
-  send(res, 200, { spaces: rows.map(spaceOut) });
+  const rows = db.prepare(`${SPACE_SELECT} WHERE s.user_id = ? ORDER BY COALESCE(s.opened_at, s.added_at) DESC`).all(user.id);
+  send(res, 200, { spaces: rows.map((r) => spaceOut(r)) });
 });
 
 route("POST", /^\/api\/spaces$/, async (req, res, user) => {
@@ -154,20 +192,32 @@ route("POST", /^\/api\/spaces$/, async (req, res, user) => {
   const row = { id: newSpaceId(), added_at: Date.now() };
   db.prepare("INSERT INTO spaces (user_id, id, app_id, name, base, path, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(user.id, row.id, s.appId, s.name, s.base, s.path, row.added_at);
-  send(res, 201, { space: spaceOut(db.prepare("SELECT * FROM spaces WHERE user_id = ? AND id = ?").get(user.id, row.id)) });
+  send(res, 201, { space: spaceOut(getSpace(user.id, row.id)) });
 });
 
 route("PUT", /^\/api\/spaces\/([\w-]{1,40})$/, async (req, res, user, [id]) => {
   const s = cleanSpace(await readJson(req));
-  const r = db.prepare("UPDATE spaces SET app_id = ?, name = ?, base = ?, path = ? WHERE user_id = ? AND id = ?")
-    .run(s.appId, s.name, s.base, s.path, user.id, id);
-  if (!r.changes) throw new HttpError(404, "not_found");
-  send(res, 200, { space: spaceOut(db.prepare("SELECT * FROM spaces WHERE user_id = ? AND id = ?").get(user.id, id)) });
+  const old = getSpace(user.id, id);
+  if (!old) throw new HttpError(404, "not_found");
+  tx(() => {
+    db.prepare("UPDATE spaces SET app_id = ?, name = ?, base = ?, path = ? WHERE user_id = ? AND id = ?")
+      .run(s.appId, s.name, s.base, s.path, user.id, id);
+    // Nouvelle adresse : la connexion unique de l'ancienne instance ne vaut plus pour cet espace.
+    if (old.client_id && old.base !== s.base) {
+      db.prepare("UPDATE spaces SET client_id = NULL WHERE user_id = ? AND id = ?").run(user.id, id);
+      dropOrphanClient(old.client_id);
+    }
+  });
+  send(res, 200, { space: spaceOut(getSpace(user.id, id)) });
 });
 
 route("DELETE", /^\/api\/spaces\/([\w-]{1,40})$/, (req, res, user, [id]) => {
-  const r = db.prepare("DELETE FROM spaces WHERE user_id = ? AND id = ?").run(user.id, id);
-  if (!r.changes) throw new HttpError(404, "not_found");
+  const old = getSpace(user.id, id);
+  if (!old) throw new HttpError(404, "not_found");
+  tx(() => {
+    db.prepare("DELETE FROM spaces WHERE user_id = ? AND id = ?").run(user.id, id);
+    if (old.client_id) dropOrphanClient(old.client_id);
+  });
   send(res, 200, { ok: true });
 });
 
@@ -182,7 +232,7 @@ route("POST", /^\/api\/spaces\/([\w-]{1,40})\/opened$/, (req, res, user, [id]) =
 route("GET", /^\/api\/spaces\/export$/, (req, res, user) => {
   const rows = db.prepare("SELECT * FROM spaces WHERE user_id = ? ORDER BY added_at").all(user.id);
   const date = new Date().toISOString().slice(0, 10);
-  send(res, 200, { format: "kosmy.admin.v1", exportedAt: new Date().toISOString(), spaces: rows.map(spaceOut) }, {
+  send(res, 200, { format: "kosmy.admin.v1", exportedAt: new Date().toISOString(), spaces: rows.map((r) => spaceOut(r, false)) }, {
     "Content-Disposition": `attachment; filename="kosmy-board-${date}.json"`,
   });
 });
@@ -259,8 +309,14 @@ route("DELETE", /^\/api\/invites\/([\w-]{1,40})$/, (req, res, user, [id]) => {
 
 route("DELETE", /^\/api\/users\/([\w-]{1,40})$/, (req, res, user, [id]) => {
   if (id === user.id) throw bad("self");
-  const r = db.prepare("DELETE FROM users WHERE id = ?").run(id);
-  if (!r.changes) throw new HttpError(404, "not_found");
+  const clients = db.prepare("SELECT DISTINCT client_id FROM spaces WHERE user_id = ? AND client_id IS NOT NULL").all(id);
+  tx(() => {
+    const r = db.prepare("DELETE FROM users WHERE id = ?").run(id);
+    if (!r.changes) throw new HttpError(404, "not_found");
+    // Ses sessions et autorisations de connexion unique disparaissent avec lui.
+    db.prepare("DELETE FROM oidc_store WHERE json_extract(payload, '$.accountId') = ?").run(id);
+    for (const c of clients) dropOrphanClient(c.client_id);
+  });
   send(res, 200, { ok: true });
 }, { admin: true });
 
@@ -297,6 +353,240 @@ route("POST", /^\/api\/invites\/accept$/, async (req, res) => {
   createSession(res, id);
   send(res, 201, { ok: true });
 }, { auth: false });
+
+/* ---------- Double authentification ---------- */
+
+const tickets = new Map(); // ticket → { userId, exp, attempts } : 5 minutes entre le mot de passe et le code
+function newTicket(userId) {
+  const t = token(24);
+  tickets.set(t, { userId, exp: Date.now() + 5 * 60_000, attempts: 0 });
+  if (tickets.size > 1000) for (const [k, v] of tickets) if (v.exp < Date.now()) tickets.delete(k);
+  return t;
+}
+
+/** Code de l'application (TOTP), ou code de secours (utilisable une seule fois). */
+function checkSecondFactor(userId, code) {
+  const row = db.prepare("SELECT totp_secret, totp_last_step, recovery_codes FROM users WHERE id = ?").get(userId);
+  if (!row?.totp_secret) return false;
+  const step = verifyTotp(row.totp_secret, code, row.totp_last_step);
+  if (step !== null) {
+    db.prepare("UPDATE users SET totp_last_step = ? WHERE id = ?").run(step, userId);
+    return true;
+  }
+  const rc = normalizeRecovery(code);
+  if (rc.length !== 8) return false;
+  const hashes = JSON.parse(row.recovery_codes || "[]");
+  const h = sha256(rc);
+  if (!hashes.includes(h)) return false;
+  db.prepare("UPDATE users SET recovery_codes = ? WHERE id = ?").run(JSON.stringify(hashes.filter((x) => x !== h)), userId);
+  return true;
+}
+
+function freshRecoveryCodes() {
+  const codes = newRecoveryCodes();
+  return { codes, hashes: JSON.stringify(codes.map((c) => sha256(normalizeRecovery(c)))) };
+}
+
+route("GET", /^\/api\/2fa$/, (req, res, user) => {
+  const row = db.prepare("SELECT totp_secret, recovery_codes FROM users WHERE id = ?").get(user.id);
+  send(res, 200, { enabled: Boolean(row.totp_secret), recoveryLeft: JSON.parse(row.recovery_codes || "[]").length });
+});
+
+route("POST", /^\/api\/2fa\/setup$/, async (req, res, user) => {
+  if (user.totp) throw new HttpError(409, "2fa_enabled");
+  const secret = newTotpSecret();
+  db.prepare("UPDATE users SET totp_pending = ? WHERE id = ?").run(secret, user.id);
+  const uri = otpauthUri(secret, user.email);
+  const qr = await QRCode.toString(uri, { type: "svg", margin: 1, errorCorrectionLevel: "M", color: { dark: "#0d0c0aff", light: "#f1ede4ff" } });
+  send(res, 200, { secret, uri, qr });
+});
+
+route("POST", /^\/api\/2fa\/enable$/, async (req, res, user) => {
+  const body = await readJson(req);
+  const row = db.prepare("SELECT totp_pending FROM users WHERE id = ?").get(user.id);
+  if (!row.totp_pending) throw bad("2fa_setup");
+  const step = verifyTotp(row.totp_pending, body.code);
+  if (step === null) throw bad("code");
+  const { codes, hashes } = freshRecoveryCodes();
+  db.prepare("UPDATE users SET totp_secret = totp_pending, totp_pending = NULL, totp_last_step = ?, recovery_codes = ? WHERE id = ?")
+    .run(step, hashes, user.id);
+  send(res, 200, { recoveryCodes: codes });
+});
+
+/** Désactiver la double authentification ou refaire les codes de secours : mot de passe et code demandés. */
+async function confirmIdentity(req, user) {
+  const body = await readJson(req);
+  const keys = [`pw:${user.id}`];
+  const wait = lockedFor(keys);
+  if (wait) throw new HttpError(429, "locked", { wait });
+  const row = db.prepare("SELECT password_hash FROM users WHERE id = ?").get(user.id);
+  if (!(await verifyPassword(String(body.password ?? "").slice(0, 200), row.password_hash))) {
+    recordFailure(keys);
+    throw bad("current_password");
+  }
+  if (!checkSecondFactor(user.id, body.code)) {
+    recordFailure(keys);
+    throw bad("code");
+  }
+}
+
+route("POST", /^\/api\/2fa\/disable$/, async (req, res, user) => {
+  await confirmIdentity(req, user);
+  db.prepare("UPDATE users SET totp_secret = NULL, totp_pending = NULL, totp_last_step = NULL, recovery_codes = NULL WHERE id = ?").run(user.id);
+  send(res, 200, { ok: true });
+});
+
+route("POST", /^\/api\/2fa\/recovery$/, async (req, res, user) => {
+  await confirmIdentity(req, user);
+  const { codes, hashes } = freshRecoveryCodes();
+  db.prepare("UPDATE users SET recovery_codes = ? WHERE id = ?").run(hashes, user.id);
+  send(res, 200, { recoveryCodes: codes });
+});
+
+/* ---------- Connexion unique (OpenID Connect) ---------- */
+
+const AUTH_METHODS = new Set(["client_secret_basic", "client_secret_post"]);
+/** Convention des applis Kosmy (voir docs/integration.md). */
+const kosmyDefaults = (base) => ({
+  redirectUri: `${base}/auth/kosmy-board/callback`,
+  initiateLoginUri: `${base}/auth/kosmy-board/login`,
+});
+
+/** Adresse de retour ou de lancement : http(s), sans fragment ni identifiant, https obligatoire hors réseau local. */
+function cleanUri(v, code) {
+  let u;
+  try {
+    u = new URL(str(v, 500));
+  } catch {
+    throw bad(code);
+  }
+  if (!/^https?:$/.test(u.protocol) || u.hash || u.username || u.password) throw bad(code);
+  if (u.protocol === "http:" && !isLocalHost(u.host)) throw bad(`${code}_https`);
+  return u.href;
+}
+
+function ssoInput(body) {
+  const list = Array.isArray(body.redirectUris) ? body.redirectUris : [body.redirectUris];
+  const redirectUris = [...new Set(list.filter((x) => typeof x === "string" && x.trim()).slice(0, 5).map((x) => cleanUri(x, "redirect_uri")))];
+  if (!redirectUris.length) throw bad("redirect_uri");
+  const initiateLoginUri = str(body.initiateLoginUri, 500) ? cleanUri(body.initiateLoginUri, "initiate_uri") : null;
+  const authMethod = AUTH_METHODS.has(body.authMethod) ? body.authMethod : "client_secret_basic";
+  return { redirectUris, initiateLoginUri, authMethod };
+}
+
+const canManage = (user, client) => user.role === "admin" || client.created_by === user.id;
+const getClient = (clientId) => db.prepare("SELECT * FROM sso_clients WHERE client_id = ?").get(clientId);
+
+function ssoOut(user, space, client, secret) {
+  return {
+    issuer: ISSUER,
+    discovery: `${ISSUER}/.well-known/openid-configuration`,
+    defaults: space.app_id ? kosmyDefaults(space.base) : null,
+    enabled: Boolean(client),
+    ...(client ? {
+      clientId: client.client_id,
+      redirectUris: JSON.parse(client.redirect_uris),
+      initiateLoginUri: client.initiate_login_uri,
+      authMethod: client.auth_method,
+      canManage: canManage(user, client),
+      secretAt: client.secret_at,
+      sharedWith: db.prepare("SELECT COUNT(DISTINCT user_id) AS n FROM spaces WHERE client_id = ?").get(client.client_id).n,
+    } : {}),
+    ...(secret ? { secret } : {}),
+  };
+}
+
+/** Plus aucun espace ne pointe vers ce client : on le supprime, avec ses jetons. */
+function dropOrphanClient(clientId) {
+  if (db.prepare("SELECT 1 FROM spaces WHERE client_id = ?").get(clientId)) return;
+  db.prepare("DELETE FROM sso_clients WHERE client_id = ?").run(clientId);
+  db.prepare("DELETE FROM oidc_store WHERE json_extract(payload, '$.clientId') = ?").run(clientId);
+}
+
+function spaceForSso(user, id) {
+  const space = getSpace(user.id, id);
+  if (!space) throw new HttpError(404, "not_found");
+  return { space, client: space.client_id ? getClient(space.client_id) : null };
+}
+
+/** oidc-provider valide les métadonnées du client : on vérifie qu'il est utilisable, sinon on annule. */
+async function assertClientUsable(clientId, rollback) {
+  try {
+    await provider.Client.find(clientId);
+  } catch (e) {
+    rollback();
+    throw bad("client_invalid", { detail: e.error_description || e.message });
+  }
+}
+
+route("GET", /^\/api\/spaces\/([\w-]{1,40})\/sso$/, (req, res, user, [id]) => {
+  const { space, client } = spaceForSso(user, id);
+  // Une autre personne a peut-être déjà relié cette instance : l'appli est alors déjà réglée.
+  const existing = client ? null : db.prepare("SELECT 1 FROM sso_clients WHERE base = ?").get(space.base);
+  send(res, 200, { ...ssoOut(user, space, client), existing: Boolean(existing) });
+});
+
+/* Activer : rejoint le client de cette instance s'il existe, sinon en crée un (son secret n'est montré qu'à ce moment). */
+route("POST", /^\/api\/spaces\/([\w-]{1,40})\/sso$/, async (req, res, user, [id]) => {
+  const body = await readJson(req);
+  const { space, client } = spaceForSso(user, id);
+  if (client) throw new HttpError(409, "sso_enabled");
+  const existing = db.prepare("SELECT * FROM sso_clients WHERE base = ?").get(space.base);
+  if (existing) {
+    db.prepare("UPDATE spaces SET client_id = ? WHERE user_id = ? AND id = ?").run(existing.client_id, user.id, id);
+    send(res, 200, ssoOut(user, space, existing));
+    return;
+  }
+  const input = ssoInput(body);
+  const secret = token(32);
+  const clientId = `kb-${token(12)}`;
+  const now = Date.now();
+  tx(() => {
+    db.prepare(
+      `INSERT INTO sso_clients (client_id, base, name, app_id, secret, redirect_uris, initiate_login_uri, auth_method, created_by, created_at, secret_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(clientId, space.base, space.name, space.app_id, secret, JSON.stringify(input.redirectUris), input.initiateLoginUri, input.authMethod, user.id, now, now);
+    db.prepare("UPDATE spaces SET client_id = ? WHERE user_id = ? AND id = ?").run(clientId, user.id, id);
+  });
+  await assertClientUsable(clientId, () => tx(() => {
+    db.prepare("UPDATE spaces SET client_id = NULL WHERE client_id = ?").run(clientId);
+    db.prepare("DELETE FROM sso_clients WHERE client_id = ?").run(clientId);
+  }));
+  send(res, 201, ssoOut(user, space, getClient(clientId), secret));
+});
+
+route("PUT", /^\/api\/spaces\/([\w-]{1,40})\/sso$/, async (req, res, user, [id]) => {
+  const input = ssoInput(await readJson(req));
+  const { space, client } = spaceForSso(user, id);
+  if (!client) throw new HttpError(404, "sso_disabled");
+  if (!canManage(user, client)) throw new HttpError(403, "sso_manage");
+  const update = db.prepare("UPDATE sso_clients SET redirect_uris = ?, initiate_login_uri = ?, auth_method = ? WHERE client_id = ?");
+  update.run(JSON.stringify(input.redirectUris), input.initiateLoginUri, input.authMethod, client.client_id);
+  await assertClientUsable(client.client_id, () =>
+    update.run(client.redirect_uris, client.initiate_login_uri, client.auth_method, client.client_id));
+  send(res, 200, ssoOut(user, space, getClient(client.client_id)));
+});
+
+/* Nouveau secret : l'ancien cesse de fonctionner tout de suite. */
+route("POST", /^\/api\/spaces\/([\w-]{1,40})\/sso\/secret$/, (req, res, user, [id]) => {
+  const { space, client } = spaceForSso(user, id);
+  if (!client) throw new HttpError(404, "sso_disabled");
+  if (!canManage(user, client)) throw new HttpError(403, "sso_manage");
+  const secret = token(32);
+  db.prepare("UPDATE sso_clients SET secret = ?, secret_at = ? WHERE client_id = ?").run(secret, Date.now(), client.client_id);
+  send(res, 200, ssoOut(user, space, getClient(client.client_id), secret));
+});
+
+/* Désactiver pour cet espace. Le client disparaît quand plus personne ne l'utilise. */
+route("DELETE", /^\/api\/spaces\/([\w-]{1,40})\/sso$/, (req, res, user, [id]) => {
+  const { client } = spaceForSso(user, id);
+  if (!client) throw new HttpError(404, "sso_disabled");
+  tx(() => {
+    db.prepare("UPDATE spaces SET client_id = NULL WHERE user_id = ? AND id = ?").run(user.id, id);
+    dropOrphanClient(client.client_id);
+  });
+  send(res, 200, { ok: true });
+});
 
 /* ---------- Aiguillage ---------- */
 

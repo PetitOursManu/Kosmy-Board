@@ -81,6 +81,9 @@ export function renderEdit(main, { id, appId }) {
         <button class="btn signal" type="submit" id="save"></button>
         <a class="link" href="#/">${esc(t("cancel"))}</a>
       </div>
+      ${editing ? `<a class="sso-link" href="#/connexion-unique/${encodeURIComponent(editing.id)}">
+        <span><strong>${esc(t("ssoLink"))}</strong><span class="mono">${esc(editing.sso ? t("ssoEnabled") : t("ssoLinkHint"))}</span></span>
+        <span class="arrow" aria-hidden="true">→</span></a>` : ""}
       ${editing ? `<div class="danger-zone"><button type="button" id="delete"><strong>${esc(t("removeSpace"))}</strong><span class="mono">${esc(t("removeSpaceHint"))}</span></button></div>` : ""}
     </form>`;
 

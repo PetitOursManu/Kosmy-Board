@@ -31,10 +31,135 @@ function peopleHtml(data) {
   </div>`;
 }
 
+/* ---------- Double authentification ---------- */
+
+function codesHtml(codes) {
+  return `
+    <div class="recovery">
+      <p class="mono label">${esc(t("recoveryTitle"))}</p>
+      <p class="hint">${esc(t("recoveryText"))}</p>
+      <ul class="codes mono">${codes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>
+      <div class="inline-actions">
+        <button class="btn ghost" type="button" data-copy="${esc(codes.join("\n"))}">${esc(t("copy2"))}</button>
+        <button class="btn ghost" type="button" id="tfa-download">${esc(t("recoveryDownload"))} ↓</button>
+        <button class="btn signal" type="button" id="tfa-done">${esc(t("recoveryDone"))}</button>
+      </div>
+    </div>`;
+}
+
+const confirmFields = (u) => `
+  <p class="mono label" style="margin-top:20px">${esc(t("twoFactorConfirmTitle"))}</p>
+  <input type="text" name="username" autocomplete="username" value="${esc(u.email)}" hidden>
+  <div class="field"><label class="mono" for="tfa-pw">${esc(t("currentPassword"))}</label>
+    <input class="input" id="tfa-pw" type="password" autocomplete="current-password" required></div>
+  <div class="field"><label class="mono" for="tfa-code">${esc(t("code"))}</label>
+    <input class="input" id="tfa-code" autocomplete="one-time-code" inputmode="numeric" spellcheck="false" maxlength="12" required></div>`;
+
+/** États : off, setup (QR code), codes (codes de secours à noter), on, confirm-disable, confirm-recovery. */
+async function renderTfa(box, mode, main, data = {}) {
+  const u = state.user;
+  const err = `<p class="error" role="alert" hidden></p>`;
+  const showError = (ex) => {
+    const p = $(".error", box);
+    p.textContent = errorText(ex.code, ex.extra);
+    p.hidden = false;
+  };
+
+  if (mode === "off") {
+    box.innerHTML = `<button class="btn signal" type="button" id="tfa-start">${esc(t("twoFactorStart"))}</button>${err}`;
+    $("#tfa-start", box).addEventListener("click", async (e) => {
+      const restore = busy(e.currentTarget, "…");
+      try {
+        renderTfa(box, "setup", main, await api.post("api/2fa/setup"));
+      } catch (ex) {
+        restore();
+        showError(ex);
+      }
+    });
+  } else if (mode === "setup") {
+    // Le QR code est un SVG produit par le serveur du Board (bibliothèque qrcode), pas une donnée saisie.
+    box.innerHTML = `
+      <p class="hint">${esc(t("twoFactorScan"))}</p>
+      <div class="qr">${data.qr}</div>
+      <div class="setting"><span class="mono label">${esc(t("twoFactorKey"))}</span><code>${esc(data.secret.replace(/(.{4})/g, "$1 ").trim())}</code>
+        <button class="text-btn mono" type="button" data-copy="${esc(data.secret)}">${esc(t("copy2"))}</button></div>
+      <form id="tfa-enable" novalidate>
+        <div class="field"><label class="mono" for="tfa-first">${esc(t("code"))}</label>
+          <input class="input" id="tfa-first" autocomplete="one-time-code" inputmode="numeric" maxlength="6" required></div>
+        ${err}
+        <button class="btn signal" type="submit">${esc(t("twoFactorConfirm"))}</button>
+      </form>`;
+    $("#tfa-first", box).focus();
+    $("#tfa-enable", box).addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const restore = busy($("button[type=submit]", box), "…");
+      try {
+        const r = await api.post("api/2fa/enable", { code: $("#tfa-first", box).value });
+        state.user.totp = true;
+        toast(t("twoFactorEnabledToast"));
+        renderTfa(box, "codes", main, { codes: r.recoveryCodes });
+      } catch (ex) {
+        restore();
+        showError(ex);
+      }
+    });
+  } else if (mode === "codes") {
+    box.innerHTML = codesHtml(data.codes);
+    const lead = box.closest(".section")?.querySelector(".lead");
+    if (lead) lead.textContent = t("twoFactorOn", data.codes.length);
+    $("#tfa-download", box).addEventListener("click", () => {
+      const text = `Kosmy Board — ${u.email}\n${location.origin}\n\n${data.codes.join("\n")}\n`;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      a.download = "kosmy-board-codes-de-secours.txt";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+    $("#tfa-done", box).addEventListener("click", () => renderAccount(main));
+  } else if (mode === "on") {
+    box.innerHTML = `<div class="inline-actions">
+      <button class="btn ghost" type="button" id="tfa-recovery">${esc(t("recoveryNew"))}</button>
+      <button class="btn ghost" type="button" id="tfa-off">${esc(t("twoFactorDisable"))}</button></div>`;
+    $("#tfa-recovery", box).addEventListener("click", () => renderTfa(box, "confirm-recovery", main));
+    $("#tfa-off", box).addEventListener("click", () => renderTfa(box, "confirm-disable", main));
+  } else {
+    const disable = mode === "confirm-disable";
+    box.innerHTML = `<form id="tfa-confirm" novalidate>${confirmFields(u)}${err}
+      <div class="inline-actions">
+        <button class="btn ${disable ? "danger" : "signal"}" type="submit">${esc(disable ? t("twoFactorDisable") : t("recoveryNew"))}</button>
+        <button class="btn ghost" type="button" id="tfa-cancel">${esc(t("cancel"))}</button>
+      </div></form>`;
+    $("#tfa-pw", box).focus();
+    $("#tfa-cancel", box).addEventListener("click", () => renderTfa(box, "on", main));
+    $("#tfa-confirm", box).addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const restore = busy($("button[type=submit]", box), "…");
+      const body = { password: $("#tfa-pw", box).value, code: $("#tfa-code", box).value };
+      try {
+        if (disable) {
+          await api.post("api/2fa/disable", body);
+          state.user.totp = false;
+          toast(t("twoFactorDisabled"));
+          renderAccount(main);
+        } else {
+          const r = await api.post("api/2fa/recovery", body);
+          renderTfa(box, "codes", main, { codes: r.recoveryCodes });
+        }
+      } catch (ex) {
+        restore();
+        showError(ex);
+      }
+    });
+  }
+}
+
 export async function renderAccount(main) {
   const u = state.user;
   const isAdmin = u.role === "admin";
-  const people = isAdmin ? await api.get("api/users").catch(() => null) : null;
+  const [people, tfa] = await Promise.all([
+    isAdmin ? api.get("api/users").catch(() => null) : null,
+    api.get("api/2fa").catch(() => ({ enabled: false, recoveryLeft: 0 })),
+  ]);
   let n = 0;
   const num = () => String(++n).padStart(2, "0");
 
@@ -55,6 +180,7 @@ export async function renderAccount(main) {
             <p class="error" role="alert" hidden></p>
             <button class="btn ghost" type="submit">${esc(t("saveName"))}</button>
           </form>`)}
+        ${section(num(), esc(t("twoFactor")), `<div id="tfa"></div>`, tfa.enabled ? t("twoFactorOn", tfa.recoveryLeft) : t("twoFactorOff"))}
         ${section(num(), esc(t("changePassword")), `
           <form id="password" novalidate>
             <input type="text" name="username" autocomplete="username" value="${esc(u.email)}" hidden>
@@ -86,6 +212,8 @@ export async function renderAccount(main) {
         ${section(num(), esc(t("signOut")), `<button class="btn ghost" type="button" id="logout">${esc(t("signOut"))}</button>`, t("signOutText"))}
       </div>
     </section>`;
+
+  renderTfa($("#tfa", main), tfa.enabled ? "on" : "off", main);
 
   const formError = (form, ex) => {
     const p = $(".error", form);

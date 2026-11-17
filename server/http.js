@@ -65,7 +65,9 @@ export function sameOrigin(req) {
   const site = req.headers["sec-fetch-site"];
   if (site && site !== "same-origin" && site !== "none") return false;
   const origin = req.headers.origin;
-  if (!origin) return Boolean(site); // navigateur récent sans Origin : Sec-Fetch-Site suffit
+  // Formulaire classique avec Referrer-Policy: no-referrer : le navigateur envoie « Origin: null ».
+  // Sec-Fetch-Site (déjà vérifié ci-dessus) suffit alors.
+  if (!origin || origin === "null") return Boolean(site);
   if (origin === config.publicOrigin) return true;
   try {
     return new URL(origin).host === req.headers.host;

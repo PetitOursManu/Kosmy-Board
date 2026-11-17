@@ -5,3 +5,4 @@ data/
 *.db-shm
 .DS_Store
 .claude/
+examples/demo-app/settings.json

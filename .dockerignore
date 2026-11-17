@@ -5,3 +5,5 @@ test
 node_modules
 *.md
 !README.md
+examples
+docs

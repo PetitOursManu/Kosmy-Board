@@ -8,6 +8,9 @@ avec la même identité visuelle que le site Kosmy.
   Le premier compte (administrateur) est créé au premier lancement ; les suivants arrivent par lien d'invitation.
 - **Espaces** : une appli du catalogue Kosmy (le chemin de sa page d'admin est pré-rempli) ou n'importe quelle autre appli web.
 - **Statut** : « joignable » ou « injoignable », vérifié depuis votre navigateur. C'est une indication, pas un contrôle d'accès.
+- **Connexion unique** : le Board est un fournisseur d'identité OpenID Connect. Une appli reliée
+  propose « Se connecter avec Kosmy Board », et « Ouvrir » vous y connecte directement.
+- **Double authentification** (TOTP, avec codes de secours) pour les comptes du Board.
 - **Export / import** en JSON, au format des espaces admin de Kosmy Mobile.
 - Français / anglais, ordinateur et mobile, animations réduites si le système le demande.
 
@@ -24,12 +27,26 @@ Le Board n'affiche pas les pages d'admin dans une iframe : la plupart des applis
 - Le Board ne peut pas vous déconnecter d'une instance (il ne peut pas effacer les cookies d'un autre site) :
   supprimer un espace ne ferme pas sa session. Déconnectez-vous dans la page de l'instance.
 
-> Prochaine étape : la connexion unique. Le Board deviendra fournisseur d'identité OpenID Connect,
-> et chaque appli pourra proposer « Se connecter avec Kosmy Board ». Il suffira alors d'être connecté au Board.
+## Connexion unique
+
+Avec la connexion unique, il suffit d'être connecté au Board : plus de mot de passe à saisir dans chaque appli.
+
+1. Dans le Board : **Modifier** l'espace → **Connexion unique** → activer. Le Board crée un client OpenID Connect
+   pour l'instance et affiche les réglages à coller dans l'appli (émetteur, identifiant et secret client).
+2. Dans l'appli : coller ces réglages dans sa page d'administration.
+3. **Ouvrir**, dans le Board, vous connecte directement à l'appli.
+
+- Le Board ne connaît toujours pas les mots de passe des instances : c'est l'appli qui fait confiance au Board.
+- Seules les personnes qui ont l'espace dans leur Board peuvent se connecter à l'instance par le Board.
+  Plusieurs personnes peuvent partager la même instance : elles rejoignent le même client.
+- Se déconnecter du Board coupe les nouvelles connexions aux applis (les sessions déjà ouvertes dans les applis restent ouvertes).
+- L'appli doit savoir se connecter avec OpenID Connect. Pour les applis Kosmy, voir le
+  [guide d'intégration](docs/integration.md) ; l'[appli de démonstration](examples/demo-app/server.js) en est l'implémentation de référence.
 
 ## Installer avec Docker
 
-Aucune dépendance npm : Node 24 et son module SQLite intégré suffisent.
+Trois dépendances npm, à versions figées : `oidc-provider` (certifié OpenID), `jose` et `qrcode`.
+SQLite est le module intégré à Node 24.
 
 ```bash
 docker build -t kosmy-board .
@@ -52,9 +69,9 @@ Ouvrez le Board, saisissez le code affiché dans les journaux, puis créez le co
 
 | Variable | Par défaut | Rôle |
 | --- | --- | --- |
-| `PUBLIC_URL` | `http://localhost:8767` | Adresse publique du Board (liens d'invitation, cookies sécurisés en https). |
+| `PUBLIC_URL` | `http://localhost:8767` | Adresse publique du Board (liens d'invitation, cookies sécurisés en https). L'émetteur OpenID Connect est `{PUBLIC_URL}/oidc` : ne plus la changer une fois des applis reliées. |
 | `KOSMY_URL` | `http://localhost:8766` | Lien « ← Kosmy » de l'en-tête. |
-| `TRUST_PROXY` | non | `1` derrière un reverse proxy (Coolify, Traefik, Caddy, Nginx). |
+| `TRUST_PROXY` | non | `1` derrière un reverse proxy (Coolify, Traefik, Caddy, Nginx). Indispensable pour la connexion unique : sans lui, les adresses OpenID annoncées seraient en http. |
 | `DATA_DIR` | `./data` (`/data` dans l'image) | Dossier de la base SQLite. |
 | `PORT` | `8767` | Port d'écoute. |
 | `SESSION_DAYS` | `30` | Durée d'une session du Board. |
@@ -65,11 +82,18 @@ Voir aussi [`.env.example`](.env.example).
 ## Développement
 
 ```bash
-npm run dev    # http://localhost:8767, rechargé à chaque modification du serveur
-npm test       # tests de l'API et du nettoyage des adresses
+npm install
+npm run dev                          # http://localhost:8767, rechargé à chaque modification du serveur
+node examples/demo-app/server.js     # appli de démonstration sur http://localhost:8768
+npm test                             # API, connexion unique de bout en bout, double authentification
 ```
 
-- `server/` : serveur HTTP sans dépendance (`node:http`, `node:sqlite`, `node:crypto`).
+Pour essayer la connexion unique en local : ajoutez l'espace `http://localhost:8768` (page `/admin`) dans le Board,
+activez sa connexion unique avec l'adresse de retour `http://localhost:8768/auth/kosmy-board/callback`
+et l'adresse de lancement `http://localhost:8768/auth/kosmy-board/login`, puis collez les réglages
+dans `http://localhost:8768/settings`.
+
+- `server/` : serveur HTTP (`node:http`, `node:sqlite`, `node:crypto`) ; `server/oidc.js` pour la connexion unique.
 - `public/` : l'interface, en HTML, CSS et JavaScript (modules ES), sans étape de build.
 - `public/js/normalize.js` est partagé par l'interface et le serveur.
 - `public/js/catalog-fallback.json` et `public/assets/logos/` : copie de secours du catalogue de Kosmy Mobile.
@@ -79,7 +103,12 @@ npm test       # tests de l'API et du nettoyage des adresses
 - Mots de passe du Board hachés avec scrypt ; jetons de session et d'invitation stockés hachés.
 - Cookies `HttpOnly`, `SameSite=Lax`, `Secure` en https ; requêtes d'un autre site refusées (`Origin`, `Sec-Fetch-Site`).
 - Connexion bloquée 15 minutes après 5 échecs sur un compte (30 par adresse IP).
+- Double authentification TOTP (RFC 6238) ; codes de secours à usage unique, stockés hachés ; un code accepté ne repasse pas.
+- Connexion unique : code d'autorisation, PKCE, ID token signé RS256 ; clés et secrets des cookies créés au premier
+  lancement et gardés dans la base. Les secrets des clients sont montrés une seule fois.
 - CSP stricte, pas d'iframe, pas de script tiers, `Referrer-Policy: no-referrer`.
+
+Sauvegardez le dossier `/data` : il contient les comptes, les espaces et les clés de signature OpenID Connect.
 
 ## Format d'export
 
