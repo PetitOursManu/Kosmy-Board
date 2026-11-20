@@ -88,6 +88,10 @@ const MIGRATIONS = [
   ALTER TABLE users ADD COLUMN totp_last_step INTEGER;
   ALTER TABLE users ADD COLUMN recovery_codes TEXT;
   `,
+  /* v3 : appareils (Kosmy Mobile). Une session avec un nom d'appareil s'utilise par jeton (Authorization: Bearer), pas par cookie. */
+  `
+  ALTER TABLE sessions ADD COLUMN device TEXT;
+  `,
 ];
 
 /** Petites valeurs persistantes (clés de signature, secrets des cookies). */

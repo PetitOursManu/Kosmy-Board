@@ -56,37 +56,67 @@ export function createSession(res, userId) {
   setCookie(res, raw, config.sessionDays * 86_400);
 }
 
+/**
+ * Connexion d'un appareil (Kosmy Mobile) : un jeton renvoyé dans la réponse, jamais dans un cookie.
+ * L'appareil le garde et l'envoie dans « Authorization: Bearer ». Seul son haché est conservé.
+ */
+export function createDeviceToken(userId, device) {
+  const raw = token();
+  const now = Date.now();
+  db.prepare("INSERT INTO sessions (id_hash, user_id, created_at, expires_at, seen_at, device) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(sha256(raw), userId, now, now + config.deviceDays * DAY, now, device);
+  return raw;
+}
+
 export function setCookie(res, value, maxAge) {
   const parts = [`${COOKIE}=${value}`, "Path=/", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAge}`];
   if (config.secure) parts.push("Secure");
   res.setHeader("Set-Cookie", parts.join("; "));
 }
 
+/** La requête porte un en-tête Authorization (appareil) : les cookies sont alors ignorés. */
+export const hasAuthorization = (req) => typeof req.headers.authorization === "string";
+
+/** Jeton de la requête : « Authorization: Bearer … » pour un appareil, sinon le cookie du navigateur. */
+function sessionToken(req) {
+  if (hasAuthorization(req)) {
+    const m = /^Bearer ([\w-]{20,100})$/.exec(req.headers.authorization.trim());
+    return m ? { raw: m[1], device: true } : null;
+  }
+  const raw = parseCookies(req)[COOKIE];
+  return raw && raw.length <= 100 ? { raw, device: false } : null;
+}
+
 /** Utilisateur connecté, ou null. Prolonge la session au plus une fois par jour. */
 export function currentUser(req) {
-  const raw = parseCookies(req)[COOKIE];
-  if (!raw || raw.length > 100) return null;
-  const idHash = sha256(raw);
+  const tok = sessionToken(req);
+  if (!tok) return null;
+  const idHash = sha256(tok.raw);
   const row = db.prepare(
-    `SELECT s.expires_at, s.seen_at, u.id, u.email, u.name, u.role, u.lang, u.totp_secret IS NOT NULL AS totp
+    `SELECT s.expires_at, s.seen_at, s.device, u.id, u.email, u.name, u.role, u.lang, u.totp_secret IS NOT NULL AS totp
        FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = ?`,
   ).get(idHash);
-  if (!row) return null;
+  // Un jeton d'appareil ne vaut pas cookie, et inversement.
+  if (!row || (row.device !== null) !== tok.device) return null;
   const now = Date.now();
   if (row.expires_at < now) {
     db.prepare("DELETE FROM sessions WHERE id_hash = ?").run(idHash);
     return null;
   }
   if (now - row.seen_at > DAY) {
-    db.prepare("UPDATE sessions SET seen_at = ?, expires_at = ? WHERE id_hash = ?").run(now, now + config.sessionDays * DAY, idHash);
+    const days = tok.device ? config.deviceDays : config.sessionDays;
+    db.prepare("UPDATE sessions SET seen_at = ?, expires_at = ? WHERE id_hash = ?").run(now, now + days * DAY, idHash);
   }
-  return { id: row.id, email: row.email, name: row.name, role: row.role, lang: row.lang, totp: Boolean(row.totp), sessionHash: idHash };
+  return {
+    id: row.id, email: row.email, name: row.name, role: row.role, lang: row.lang, totp: Boolean(row.totp),
+    sessionHash: idHash, device: row.device,
+  };
 }
 
 export function destroySession(req, res) {
-  const raw = parseCookies(req)[COOKIE];
-  if (raw) db.prepare("DELETE FROM sessions WHERE id_hash = ?").run(sha256(raw));
-  setCookie(res, "", 0);
+  const tok = sessionToken(req);
+  if (tok) db.prepare("DELETE FROM sessions WHERE id_hash = ?").run(sha256(tok.raw));
+  if (!tok?.device) setCookie(res, "", 0);
 }
 
 export function purgeExpired() {

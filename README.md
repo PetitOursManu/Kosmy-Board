@@ -11,6 +11,7 @@ avec la même identité visuelle que le site Kosmy.
 - **Connexion unique** : le Board est un fournisseur d'identité OpenID Connect. Une appli reliée
   propose « Se connecter avec Kosmy Board », et « Ouvrir » vous y connecte directement.
 - **Double authentification** (TOTP, avec codes de secours) pour les comptes du Board.
+- **Synchronisation avec Kosmy Mobile** : on se connecte une fois dans l'onglet Admin de l'appli, et les espaces sont les mêmes partout.
 - **Export / import** en JSON, au format des espaces admin de Kosmy Mobile.
 - Français / anglais, ordinateur et mobile, animations réduites si le système le demande.
 
@@ -42,6 +43,24 @@ Avec la connexion unique, il suffit d'être connecté au Board : plus de mot de 
 - Se déconnecter du Board coupe les nouvelles connexions aux applis (les sessions déjà ouvertes dans les applis restent ouvertes).
 - L'appli doit savoir se connecter avec OpenID Connect. Pour les applis Kosmy, voir le
   [guide d'intégration](docs/integration.md) ; l'[appli de démonstration](examples/demo-app/server.js) en est l'implémentation de référence.
+
+## Kosmy Mobile
+
+Dans Kosmy Mobile, onglet **Admin** → **Kosmy Board** → **Se connecter** : l'adresse du Board, l'e-mail et le mot de passe
+(et le code de double authentification s'il est activé). Le téléphone reste connecté ensuite.
+
+- À la première connexion, les espaces déjà présents sur le téléphone rejoignent le compte (les doublons sont ignorés),
+  puis le téléphone reprend la liste du Board.
+- Ensuite, ajouter, modifier ou supprimer un espace dans l'appli le fait aussi sur le Board, et l'appli se met à jour
+  en revenant au premier plan ou en tirant la liste vers le bas.
+- Le téléphone reçoit un jeton d'appareil (aucun cookie), valable `DEVICE_DAYS` jours et prolongé à chaque utilisation.
+  Seul son haché est conservé. **Compte → Appareils connectés** liste les téléphones et permet d'en déconnecter un ;
+  changer de mot de passe les déconnecte tous.
+- Les sessions ouvertes dans les pages d'admin restent propres à chaque appareil : le Board ne les voit jamais.
+
+API utilisée par l'appli : `POST /api/device/login` (`email`, `password`, `device`) renvoie `{ token, user }` ou
+`{ twoFactor, ticket }`, puis `POST /api/device/login/2fa` (`ticket`, `code`). Les autres routes `/api` acceptent
+ensuite `Authorization: Bearer <token>` ; `POST /api/logout` révoque le jeton.
 
 ## Installer avec Docker
 
@@ -77,6 +96,7 @@ Le guide pas à pas, avec la sauvegarde et les problèmes courants : **[Installe
 | `DATA_DIR` | `./data` (`/data` dans l'image) | Dossier de la base SQLite. |
 | `PORT` | `8767` | Port d'écoute. |
 | `SESSION_DAYS` | `30` | Durée d'une session du Board. |
+| `DEVICE_DAYS` | `365` | Durée de la connexion de Kosmy Mobile, prolongée à chaque utilisation. |
 | `CATALOG_URL` | catalogue de Kosmy Mobile sur GitHub | Catalogue des applis (une copie de secours est embarquée). |
 
 Voir aussi [`.env.example`](.env.example).
@@ -104,6 +124,8 @@ dans `http://localhost:8768/settings`.
 
 - Mots de passe du Board hachés avec scrypt ; jetons de session et d'invitation stockés hachés.
 - Cookies `HttpOnly`, `SameSite=Lax`, `Secure` en https ; requêtes d'un autre site refusées (`Origin`, `Sec-Fetch-Site`).
+- Kosmy Mobile : jeton d'appareil dans `Authorization` (stocké haché), jamais dans un cookie ; une requête qui porte cet en-tête
+  ignore les cookies, et un jeton d'appareil ne vaut pas cookie (ni l'inverse).
 - Connexion bloquée 15 minutes après 5 échecs sur un compte (30 par adresse IP).
 - Double authentification TOTP (RFC 6238) ; codes de secours à usage unique, stockés hachés ; un code accepté ne repasse pas.
 - Connexion unique : code d'autorisation, PKCE, ID token signé RS256 ; clés et secrets des cookies créés au premier

@@ -31,6 +31,20 @@ function peopleHtml(data) {
   </div>`;
 }
 
+/* ---------- Appareils (Kosmy Mobile) ---------- */
+
+function devicesHtml(devices) {
+  if (!devices.length) return `<p class="hint">${esc(t("devicesNone"))}</p>`;
+  return `<div class="people">
+    ${devices.map((d) => `
+      <div class="person">
+        <span class="avatar" aria-hidden="true">${esc((d.name.trim()[0] || "?").toUpperCase())}</span>
+        <span class="who"><strong>${esc(d.name)}</strong><span class="mono">${esc(t("deviceSeen", relTime(d.seenAt)))}</span></span>
+        <button class="text-btn mono danger" type="button" data-device="${esc(d.id)}" data-name="${esc(d.name)}">${esc(t("deviceRevoke"))}</button>
+      </div>`).join("")}
+  </div>`;
+}
+
 /* ---------- Double authentification ---------- */
 
 function codesHtml(codes) {
@@ -156,9 +170,10 @@ async function renderTfa(box, mode, main, data = {}) {
 export async function renderAccount(main) {
   const u = state.user;
   const isAdmin = u.role === "admin";
-  const [people, tfa] = await Promise.all([
+  const [people, tfa, devices] = await Promise.all([
     isAdmin ? api.get("api/users").catch(() => null) : null,
     api.get("api/2fa").catch(() => ({ enabled: false, recoveryLeft: 0 })),
+    api.get("api/devices").then((r) => r.devices).catch(() => []),
   ]);
   let n = 0;
   const num = () => String(++n).padStart(2, "0");
@@ -181,6 +196,7 @@ export async function renderAccount(main) {
             <button class="btn ghost" type="submit">${esc(t("saveName"))}</button>
           </form>`)}
         ${section(num(), esc(t("twoFactor")), `<div id="tfa"></div>`, tfa.enabled ? t("twoFactorOn", tfa.recoveryLeft) : t("twoFactorOff"))}
+        ${section(num(), esc(t("devices")), `<div id="devices">${devicesHtml(devices)}</div>`, t("devicesText"))}
         ${section(num(), esc(t("changePassword")), `
           <form id="password" novalidate>
             <input type="text" name="username" autocomplete="username" value="${esc(u.email)}" hidden>
@@ -316,6 +332,21 @@ export async function renderAccount(main) {
         await api.del(`api/users/${encodeURIComponent(remove.dataset.removeUser)}`);
         await refreshPeople();
       }
+    } catch (ex) {
+      toast(errorText(ex.code, ex.extra), "error");
+    }
+  });
+
+  $("#devices", main).addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-device]");
+    if (!btn) return;
+    const ok = await confirmBox({ title: t("deviceRevokeTitle", btn.dataset.name), text: t("deviceRevokeText"), ok: t("deviceRevoke"), danger: true });
+    if (!ok) return;
+    try {
+      await api.del(`api/devices/${encodeURIComponent(btn.dataset.device)}`);
+      toast(t("deviceRevoked"));
+      const r = await api.get("api/devices");
+      $("#devices", main).innerHTML = devicesHtml(r.devices);
     } catch (ex) {
       toast(errorText(ex.code, ex.extra), "error");
     }

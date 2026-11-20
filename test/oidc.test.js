@@ -201,6 +201,20 @@ test("double authentification : activation, connexion, codes de secours", async 
   assert.equal((await w.request("POST", "/api/login/2fa", { ticket: t2, code: rc })).body.error, "code");
   assert.equal((await w.request("POST", "/api/login/2fa", { ticket: "faux", code: rc })).status, 401);
 
+  // Kosmy Mobile : même parcours, le jeton arrive après le code. Un ticket du navigateur ne donne pas de jeton.
+  const dev = (path, body) => fetch(srv.base + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then(async (r) => ({ status: r.status, body: await r.json() }));
+  const t3 = (await w.request("POST", "/api/login", { email: "a@x.fr", password: "motdepasse-123" })).body.ticket;
+  assert.equal((await dev("/api/device/login/2fa", { ticket: t3, code: en.body.recoveryCodes[2] })).status, 401);
+  const d1 = await dev("/api/device/login", { email: "a@x.fr", password: "motdepasse-123", device: "Pixel" });
+  assert.equal(d1.body.twoFactor, true);
+  assert.equal(d1.body.token, undefined);
+  assert.equal((await w.request("POST", "/api/login/2fa", { ticket: d1.body.ticket, code: en.body.recoveryCodes[2] })).status, 401);
+  const d2 = await dev("/api/device/login", { email: "a@x.fr", password: "motdepasse-123", device: "Pixel" });
+  const d3 = await dev("/api/device/login/2fa", { ticket: d2.body.ticket, code: en.body.recoveryCodes[2] });
+  assert.equal(d3.status, 200);
+  assert.ok(d3.body.token.length > 30);
+
   // Désactiver : mot de passe et code.
   assert.equal((await u.request("POST", "/api/2fa/disable", { password: "faux", code: en.body.recoveryCodes[1] })).body.error, "current_password");
   assert.equal((await u.request("POST", "/api/2fa/disable", { password: "motdepasse-123", code: en.body.recoveryCodes[1] })).status, 200);

@@ -5,8 +5,8 @@ import QRCode from "qrcode";
 
 import { isLocalHost, normalizeBase, normalizePath } from "../public/js/normalize.js";
 import {
-  checkPassword, checkSetupCode, clearFailures, consumeSetupCode, createSession, currentUser, destroySession,
-  dummyVerify, hashPassword, lockedFor, needsSetup, newUserId, recordFailure, sha256, token, verifyPassword,
+  checkPassword, checkSetupCode, clearFailures, consumeSetupCode, createDeviceToken, createSession, currentUser, destroySession,
+  dummyVerify, hasAuthorization, hashPassword, lockedFor, needsSetup, newUserId, recordFailure, sha256, token, verifyPassword,
 } from "./auth.js";
 import { config } from "./config.js";
 import { db, tx } from "./db.js";
@@ -102,8 +102,8 @@ route("POST", /^\/api\/setup$/, async (req, res) => {
   send(res, 201, { ok: true });
 }, { auth: false });
 
-route("POST", /^\/api\/login$/, async (req, res) => {
-  const body = await readJson(req);
+/** E-mail et mot de passe vérifiés : renvoie l'identifiant du compte et s'il faut encore le second facteur. */
+async function passwordStep(req, body) {
   const email = str(body.email, 200).toLowerCase();
   const password = typeof body.password === "string" ? body.password.slice(0, 200) : "";
   const keys = [`ip:${clientIp(req)}`, `user:${email}`];
@@ -116,20 +116,15 @@ route("POST", /^\/api\/login$/, async (req, res) => {
     throw new HttpError(401, "login_failed");
   }
   clearFailures(keys);
-  if (db.prepare("SELECT totp_secret FROM users WHERE id = ?").get(user.id).totp_secret) {
-    // Mot de passe correct, mais il faut encore le code de l'application d'authentification.
-    send(res, 200, { twoFactor: true, ticket: newTicket(user.id) });
-    return;
-  }
-  createSession(res, user.id);
-  send(res, 200, { ok: true });
-}, { auth: false });
+  return { userId: user.id, twoFactor: Boolean(db.prepare("SELECT totp_secret FROM users WHERE id = ?").get(user.id).totp_secret) };
+}
 
-route("POST", /^\/api\/login\/2fa$/, async (req, res) => {
-  const body = await readJson(req);
+/** Le code de double authentification, pour un ticket donné après le mot de passe. Renvoie le ticket. */
+function secondFactorStep(body, device) {
   const key = String(body.ticket ?? "");
   const ticket = tickets.get(key);
-  if (!ticket || ticket.exp < Date.now() || ticket.attempts >= 5) {
+  // Un ticket du navigateur ne donne pas de jeton d'appareil, et inversement.
+  if (!ticket || ticket.exp < Date.now() || ticket.attempts >= 5 || (ticket.device !== null) !== device) {
     tickets.delete(key);
     throw new HttpError(401, "ticket");
   }
@@ -143,9 +138,67 @@ route("POST", /^\/api\/login\/2fa$/, async (req, res) => {
   }
   tickets.delete(key);
   clearFailures(keys);
+  return ticket;
+}
+
+route("POST", /^\/api\/login$/, async (req, res) => {
+  const { userId, twoFactor } = await passwordStep(req, await readJson(req));
+  if (twoFactor) {
+    // Mot de passe correct, mais il faut encore le code de l'application d'authentification.
+    send(res, 200, { twoFactor: true, ticket: newTicket(userId) });
+    return;
+  }
+  createSession(res, userId);
+  send(res, 200, { ok: true });
+}, { auth: false });
+
+route("POST", /^\/api\/login\/2fa$/, async (req, res) => {
+  const ticket = secondFactorStep(await readJson(req), false);
   createSession(res, ticket.userId);
   send(res, 200, { ok: true });
 }, { auth: false });
+
+/* ---------- Appareils (Kosmy Mobile) ---------- */
+
+/*
+ * Connexion d'un appareil : le jeton est renvoyé dans la réponse (aucun cookie). Ces deux routes ne vérifient pas
+ * l'origine : une appli mobile n'en envoie pas, et une page d'un autre site ne pourrait pas lire la réponse.
+ */
+const cleanDevice = (v) => str(v, 60).replace(/[\u0000-\u001f\u007f]/g, "") || "Kosmy Mobile";
+const deviceOut = (userId, tok) => ({ token: tok, user: userOut(db.prepare("SELECT * FROM users WHERE id = ?").get(userId)) });
+
+route("POST", /^\/api\/device\/login$/, async (req, res) => {
+  const body = await readJson(req);
+  const { userId, twoFactor } = await passwordStep(req, body);
+  const device = cleanDevice(body.device);
+  if (twoFactor) {
+    send(res, 200, { twoFactor: true, ticket: newTicket(userId, device) });
+    return;
+  }
+  send(res, 200, deviceOut(userId, createDeviceToken(userId, device)));
+}, { auth: false, csrf: false });
+
+route("POST", /^\/api\/device\/login\/2fa$/, async (req, res) => {
+  const ticket = secondFactorStep(await readJson(req), true);
+  send(res, 200, deviceOut(ticket.userId, createDeviceToken(ticket.userId, ticket.device)));
+}, { auth: false, csrf: false });
+
+/* Les appareils connectés au compte, pour les déconnecter depuis le Board. */
+route("GET", /^\/api\/devices$/, (req, res, user) => {
+  const rows = db.prepare("SELECT id_hash, device, created_at, seen_at FROM sessions WHERE user_id = ? AND device IS NOT NULL ORDER BY seen_at DESC")
+    .all(user.id);
+  send(res, 200, {
+    devices: rows.map((r) => ({
+      id: r.id_hash, name: r.device, createdAt: r.created_at, seenAt: r.seen_at, current: r.id_hash === user.sessionHash,
+    })),
+  });
+});
+
+route("DELETE", /^\/api\/devices\/([\w-]{20,64})$/, (req, res, user, [id]) => {
+  const r = db.prepare("DELETE FROM sessions WHERE user_id = ? AND id_hash = ? AND device IS NOT NULL").run(user.id, id);
+  if (!r.changes) throw new HttpError(404, "not_found");
+  send(res, 200, { ok: true });
+});
 
 route("POST", /^\/api\/logout$/, (req, res) => {
   destroySession(req, res);
@@ -356,10 +409,10 @@ route("POST", /^\/api\/invites\/accept$/, async (req, res) => {
 
 /* ---------- Double authentification ---------- */
 
-const tickets = new Map(); // ticket → { userId, exp, attempts } : 5 minutes entre le mot de passe et le code
-function newTicket(userId) {
+const tickets = new Map(); // ticket → { userId, device, exp, attempts } : 5 minutes entre le mot de passe et le code
+function newTicket(userId, device = null) {
   const t = token(24);
-  tickets.set(t, { userId, exp: Date.now() + 5 * 60_000, attempts: 0 });
+  tickets.set(t, { userId, device, exp: Date.now() + 5 * 60_000, attempts: 0 });
   if (tickets.size > 1000) for (const [k, v] of tickets) if (v.exp < Date.now()) tickets.delete(k);
   return t;
 }
@@ -596,7 +649,8 @@ export async function handleApi(req, res, pathname) {
     if (!methodRoutes.length) throw new HttpError(404, "not_found");
     const r = methodRoutes.find((x) => x.method === req.method);
     if (!r) throw new HttpError(405, "method");
-    if (req.method !== "GET" && !sameOrigin(req)) throw new HttpError(403, "origin");
+    // Protection CSRF : inutile pour un appareil, qui s'authentifie par un en-tête qu'un autre site ne peut pas envoyer.
+    if (req.method !== "GET" && r.csrf !== false && !hasAuthorization(req) && !sameOrigin(req)) throw new HttpError(403, "origin");
     let user = null;
     if (r.auth !== false) {
       user = currentUser(req);

@@ -61,4 +61,6 @@ export const config = {
   trustProxy: process.env.TRUST_PROXY === "1" || process.env.TRUST_PROXY === "true",
   /** Durée d'une session du Board. */
   sessionDays: Number(process.env.SESSION_DAYS) || 30,
+  /** Durée d'une connexion d'appareil (Kosmy Mobile), prolongée à chaque utilisation. */
+  deviceDays: Number(process.env.DEVICE_DAYS) || 365,
 };

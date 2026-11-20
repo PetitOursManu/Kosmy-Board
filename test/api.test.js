@@ -126,12 +126,74 @@ test("connexion : mauvais mot de passe puis blocage", async () => {
   assert.equal((await client()("POST", "/api/login", { email: "a@x.fr", password: "motdepasse-123" })).status, 200);
 });
 
+/** Kosmy Mobile : ni cookie ni en-tête Origin, un jeton dans Authorization. */
+function device(tok) {
+  return async (method, url, body) => {
+    const res = await fetch(BASE + url, {
+      method,
+      headers: { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    return { status: res.status, body: await res.json().catch(() => null), headers: res.headers };
+  };
+}
+let phoneToken;
+
+test("appareils : connexion par jeton, synchronisation des espaces, déconnexion", async () => {
+  const anon = device();
+  // Sans origine, la connexion du navigateur est refusée ; celle d'un appareil est acceptée.
+  assert.equal((await anon("POST", "/api/login", { email: "a@x.fr", password: "motdepasse-123" })).status, 403);
+  assert.equal((await anon("POST", "/api/device/login", { email: "a@x.fr", password: "faux" })).body.error, "login_failed");
+  const login = await anon("POST", "/api/device/login", { email: "a@x.fr", password: "motdepasse-123", device: "Pixel 8" });
+  assert.equal(login.status, 200);
+  assert.equal(login.headers.get("set-cookie"), null);
+  assert.equal(login.body.user.email, "a@x.fr");
+  phoneToken = login.body.token;
+  const phone = device(phoneToken);
+  assert.equal((await phone("GET", "/api/state")).body.user.email, "a@x.fr");
+
+  // Les espaces du téléphone rejoignent le compte (sans doublon), et inversement.
+  const before = (await phone("GET", "/api/spaces")).body.spaces.length;
+  const local = [{ id: "tel1", appId: null, name: "Tel", base: "https://tel.example", path: "/admin", addedAt: 1 }];
+  assert.equal((await phone("POST", "/api/spaces/import", local)).body.added, 1);
+  assert.equal((await phone("POST", "/api/spaces/import", local)).body.skipped, 1);
+  const added = await phone("POST", "/api/spaces", { appId: null, name: "Autre", base: "autre.example", path: "/" });
+  assert.equal(added.status, 201);
+  const web = (await admin("GET", "/api/spaces")).body.spaces;
+  assert.equal(web.length, before + 2);
+  assert.ok(web.some((s) => s.id === "tel1"));
+  assert.equal((await phone("POST", `/api/spaces/${added.body.space.id}/opened`, {})).status, 200);
+  assert.equal((await phone("DELETE", `/api/spaces/${added.body.space.id}`)).status, 200);
+  assert.equal((await phone("DELETE", "/api/spaces/tel1")).status, 200);
+
+  // Un jeton ne vaut pas cookie ; un en-tête Authorization fait ignorer le cookie.
+  assert.equal((await device("x".repeat(43))("GET", "/api/spaces")).status, 401);
+  assert.equal((await admin("GET", "/api/spaces", undefined, { Authorization: `Bearer ${"x".repeat(43)}` })).status, 401);
+  assert.equal((await stranger("GET", "/api/spaces", undefined, { Cookie: `kb_session=${phoneToken}` })).status, 401);
+
+  // Le Board liste les appareils et peut en déconnecter un.
+  const other = (await anon("POST", "/api/device/login", { email: "a@x.fr", password: "motdepasse-123", device: "Vieux téléphone" })).body.token;
+  const list = (await admin("GET", "/api/devices")).body.devices;
+  assert.deepEqual(list.map((d) => d.name).sort(), ["Pixel 8", "Vieux téléphone"]);
+  const old = list.find((d) => d.name === "Vieux téléphone");
+  assert.equal((await member("DELETE", `/api/devices/${old.id}`)).status, 404);
+  assert.equal((await admin("DELETE", `/api/devices/${old.id}`)).status, 200);
+  assert.equal((await device(other)("GET", "/api/spaces")).status, 401);
+  assert.equal((await phone("GET", "/api/devices")).body.devices.find((d) => d.current).name, "Pixel 8");
+
+  // Se déconnecter depuis le téléphone révoque son jeton.
+  const tmp = (await anon("POST", "/api/device/login", { email: "a@x.fr", password: "motdepasse-123" })).body.token;
+  assert.equal((await device(tmp)("POST", "/api/logout", {})).status, 200);
+  assert.equal((await device(tmp)("GET", "/api/spaces")).status, 401);
+});
+
 test("changer de mot de passe ferme les autres sessions", async () => {
   const other = client();
   assert.equal((await other("POST", "/api/login", { email: "a@x.fr", password: "motdepasse-123" })).status, 200);
   assert.equal((await admin("POST", "/api/password", { current: "faux", next: "nouveau-mdp-789" })).body.error, "current_password");
   assert.equal((await admin("POST", "/api/password", { current: "motdepasse-123", next: "nouveau-mdp-789" })).status, 200);
   assert.equal((await other("GET", "/api/spaces")).status, 401);
+  assert.equal((await device(phoneToken)("GET", "/api/spaces")).status, 401);
   assert.equal((await admin("GET", "/api/spaces")).status, 200);
   assert.equal((await admin("POST", "/api/logout", {})).status, 200);
   assert.equal((await admin("GET", "/api/spaces")).status, 401);
