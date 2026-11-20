@@ -1,5 +1,6 @@
 /* Kosmy Board — serveur : l'interface (fichiers statiques, sans étape de build) et l'API. */
-import { createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, readdirSync, readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -11,6 +12,26 @@ import { config } from "./config.js";
 import { handleOidc, purgeOidc } from "./oidc.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
+
+/*
+ * Version de l'interface : empreinte de ses scripts et styles. index.html les charge sous « v/<version>/ » ;
+ * les imports relatifs des modules suivent le même préfixe. Chaque déploiement change donc toutes leurs adresses,
+ * et ces fichiers peuvent être gardés en cache sans fin. Indispensable derrière Cloudflare, qui remplace le
+ * « no-cache » des fichiers .js et .css par plusieurs heures de cache dans le navigateur.
+ */
+function hashUi(dir, h = createHash("sha256")) {
+  for (const e of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) hashUi(full, h);
+    else if (/\.(js|css|json)$/.test(e.name)) h.update(e.name).update(readFileSync(full));
+  }
+  return h;
+}
+const VERSION = hashUi(ROOT).digest("hex").slice(0, 12);
+const INDEX = readFileSync(path.join(ROOT, "index.html"), "utf8")
+  .replace('href="styles.css"', `href="v/${VERSION}/styles.css"`)
+  .replace('src="js/app.js"', `src="v/${VERSION}/js/app.js"`);
+const INDEX_ETAG = `W/"${createHash("sha256").update(INDEX).digest("hex").slice(0, 16)}"`;
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -67,7 +88,19 @@ async function serveStatic(req, res, pathname) {
     res.writeHead(400).end();
     return;
   }
-  if (rel === "/") rel = "/index.html";
+  if (rel === "/" || rel === "/index.html") {
+    if (req.headers["if-none-match"] === INDEX_ETAG) return void res.writeHead(304).end();
+    res.writeHead(200, { "Content-Type": TYPES[".html"], "Cache-Control": "no-cache", ETag: INDEX_ETAG });
+    res.end(req.method === "HEAD" ? undefined : INDEX);
+    return;
+  }
+  // Fichier versionné : « /v/<version>/js/app.js » sert « /js/app.js ».
+  let immutable = false;
+  const v = rel.match(/^\/v\/([^/]+)(\/.*)$/);
+  if (v) {
+    immutable = v[1] === VERSION;
+    rel = v[2];
+  }
   const file = path.join(ROOT, path.normalize(rel));
   if (!file.startsWith(ROOT + path.sep)) {
     res.writeHead(403).end();
@@ -86,7 +119,7 @@ async function serveStatic(req, res, pathname) {
   res.writeHead(200, {
     "Content-Type": TYPES[path.extname(file)] || "application/octet-stream",
     "Content-Length": info.size,
-    "Cache-Control": rel.startsWith("/assets/") ? "public, max-age=86400" : "no-cache",
+    "Cache-Control": immutable ? "public, max-age=31536000, immutable" : rel.startsWith("/assets/") ? "public, max-age=86400" : "no-cache",
     ETag: etag,
   });
   if (req.method === "HEAD") res.end();
