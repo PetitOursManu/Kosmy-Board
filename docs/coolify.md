@@ -41,7 +41,7 @@ Onglet **Environment Variables**, ajoutez :
 
 | Variable | Valeur | |
 | --- | --- | --- |
-| `PUBLIC_URL` | `https://board.mondomaine.fr` | Exactement le domaine ci-dessus, sans `/` final. |
+| `PUBLIC_URL` | `https://board.mondomaine.fr` | Exactement le domaine ci-dessus, **avec `https://`**, sans `/` final. |
 | `TRUST_PROXY` | `1` | Indispensable derrière Coolify : sans lui, les adresses de la connexion unique seraient annoncées en `http`, et toutes les connexions sembleraient venir de la même IP. |
 | `KOSMY_URL` | `https://kosmy.mondomaine.fr` | Facultatif : où mène le lien « ← Kosmy » de l'en-tête. |
 
@@ -119,6 +119,8 @@ Pour restaurer, décompressez l'archive dans le volume (Board arrêté), puis re
 
 | Ce que vous voyez | La cause probable |
 | --- | --- |
+| Déploiement annulé : *New container is unhealthy*, avec `Réglage invalide` (ou `Invalid URL`) dans les journaux | `PUBLIC_URL` ou `KOSMY_URL` mal saisie. Écrivez l'adresse complète : `https://board.mondomaine.fr`. |
+| *PUBLIC_URL sans « https:// »* dans les journaux | Le Board a ajouté `https://` tout seul et fonctionne. Ajoutez-le dans la variable pour faire taire l'avertissement. |
 | *502 Bad Gateway* / *no available server* | **Ports Exposes** n'est pas `8767`, ou le Board n'a pas encore démarré (voir **Logs**). |
 | Pas de certificat https | Le DNS ne pointe pas encore vers le serveur, ou le domaine a été saisi sans `https://`. |
 | Les comptes disparaissent après un déploiement | Pas de stockage persistant sur `/data` (étape 4). |
