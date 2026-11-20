@@ -59,11 +59,13 @@ Ouvrez le Board, saisissez le code affiché dans les journaux, puis créez le co
 
 ### Coolify
 
-1. Nouvelle ressource → dépôt GitHub `PetitOursManu/Kosmy-Board` → type de build **Dockerfile**.
-2. Port exposé : `8767`. Domaine : celui du Board (en https).
-3. Variables : `PUBLIC_URL` (l'adresse du Board), `TRUST_PROXY=1`, et `KOSMY_URL` si besoin.
-4. Stockage persistant : un volume monté sur `/data` (sinon les comptes disparaissent à chaque déploiement).
-5. Déployez, puis ouvrez l'onglet **Logs** pour lire le code de première configuration.
+Le guide pas à pas, avec la sauvegarde et les problèmes courants : **[Installer Kosmy Board sur Coolify](docs/coolify.md)**. En bref :
+
+1. Nouvelle ressource → **Public Repository** `https://github.com/PetitOursManu/Kosmy-Board` → Build Pack **Dockerfile**.
+2. **Ports Exposes** : `8767`. **Domains** : `https://board.mondomaine.fr`.
+3. Variables : `PUBLIC_URL` (exactement ce domaine), `TRUST_PROXY=1`, et `KOSMY_URL` si besoin.
+4. **Persistent Storage** : un volume monté sur `/data` (sinon les comptes disparaissent à chaque déploiement).
+5. **Deploy**, puis l'onglet **Logs** donne le code de première configuration.
 
 ### Réglages
 
