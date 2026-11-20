@@ -76,7 +76,7 @@ function currentUser(req) {
 
 /**
  * Démarre la connexion. Appelée par le bouton de la page de connexion, ou directement par le Board
- * (« Ouvrir » : connexion initiée par un tiers, paramètres iss et target_link_uri).
+ * (« Ouvrir » ou « Admin » : connexion initiée par un tiers, paramètres iss et target_link_uri).
  */
 async function startLogin(req, res, url) {
   if (!settings.clientId) return redirect(res, "/settings");

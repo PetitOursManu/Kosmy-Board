@@ -222,6 +222,9 @@ select.input option { background: var(--panel); color: var(--paper); }
 .open-btn .arrow { display: inline-block; transition: transform .45s var(--ease); }
 .row:hover .open-btn .arrow { transform: translate(3px, -3px); }
 .open-btn:hover { background: var(--ink, var(--paper)); color: var(--c, var(--bg)); border-color: var(--ink, var(--paper)); }
+/* « Admin » : même forme, plus discret que « Ouvrir » */
+.open-btn.alt { border-style: dashed; opacity: .8; }
+.open-btn.alt:hover { border-style: solid; opacity: 1; }
 /* Toute la ligne s'ouvre au clic, sauf les boutons d'action */
 .row .cover { position: absolute; inset: 0; z-index: 0; border-radius: 0; }
 .row .cover:focus-visible { outline-offset: -3px; }
