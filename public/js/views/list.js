@@ -11,19 +11,28 @@ let theme = "all";
 
 const appOf = (s) => (s.appId ? state.catalog?.appById[s.appId] : undefined);
 const themeOf = (s) => appOf(s)?.theme ?? "other";
+/** Page d'accueil de l'appli (racine de l'instance). */
+const homeUrl = (s) => `${s.base}/`;
+/** Une page d'admin distincte de l'accueil : sinon le bouton « Admin » ferait doublon avec « Ouvrir ». */
+const hasAdminPage = (s) => s.path !== "/" && s.path !== "";
 /**
- * Adresse ouverte par « Ouvrir ». Avec la connexion unique et une adresse de lancement, l'appli démarre elle-même
- * la connexion avec le Board (OpenID Connect, connexion initiée par un tiers), puis arrive sur sa page d'admin.
+ * Adresse ouverte par un clic sur la ligne (ou « Ouvrir ») : l'accueil de l'appli ; par « Admin » : sa page d'admin.
+ * Avec la connexion unique et une adresse de lancement, l'appli démarre elle-même la connexion avec le Board
+ * (OpenID Connect, connexion initiée par un tiers), puis arrive sur la page demandée.
  */
-function openUrl(s) {
-  if (!s.sso?.loginUri || !state.config.issuer) return spaceUrl(s);
+function openUrl(s, admin = false) {
+  const target = admin ? spaceUrl(s) : homeUrl(s);
+  if (!s.sso?.loginUri || !state.config.issuer) return target;
   const u = new URL(s.sso.loginUri);
   u.searchParams.set("iss", state.config.issuer);
-  u.searchParams.set("target_link_uri", spaceUrl(s));
+  u.searchParams.set("target_link_uri", target);
   return u.href;
 }
-/** Nom propre à chaque espace : l'onglet de l'instance est réutilisé à chaque ouverture. */
-const windowName = (s) => `kosmy-board-${s.id}`;
+/**
+ * Nom propre à chaque espace : l'onglet de l'instance est réutilisé à chaque ouverture.
+ * L'admin a son propre onglet, sinon « Ouvrir » ramènerait l'onglet resté sur l'admin (et inversement).
+ */
+const windowName = (s, admin = false) => `kosmy-board-${s.id}${admin ? "-admin" : ""}`;
 
 function stateHtml(url) {
   const st = getStatus(url) ?? "checking";
@@ -54,6 +63,7 @@ function rowHtml(s, i, animate) {
       <span class="meta-r mono"><span class="opened">${esc(opened)}</span><span>${esc(themeName ?? "")}</span></span>
       <span class="actions mono">
         <a class="open-btn" href="${esc(open)}" target="${target}" rel="noopener noreferrer" aria-label="${esc(t("openLabel", s.name, host))}">${esc(t("open"))} <span class="arrow" aria-hidden="true">↗</span></a>
+        ${hasAdminPage(s) ? `<a class="open-btn alt" href="${esc(openUrl(s, true))}" target="${windowName(s, true)}" rel="noopener noreferrer" data-admin aria-label="${esc(t("adminLabel", s.name, host))}">${esc(t("admin"))}</a>` : ""}
         <a class="text-btn" href="#/modifier/${encodeURIComponent(s.id)}" aria-label="${esc(`${t("edit")} ${s.name}`)}">${esc(t("edit"))}</a>
         <button class="text-btn danger" type="button" data-remove aria-label="${esc(`${t("remove")} ${s.name}`)}">${esc(t("remove"))}</button>
       </span>
@@ -139,11 +149,11 @@ function openInTab(url, name) {
   }
 }
 
-async function openSpace(s, e) {
+async function openSpace(s, e, admin = false) {
   const plain = e && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.button === 0;
   if (plain) {
     e.preventDefault();
-    openInTab(openUrl(s), windowName(s));
+    openInTab(openUrl(s, admin), windowName(s, admin));
   }
   try {
     const { openedAt } = await api.post(`api/spaces/${encodeURIComponent(s.id)}/opened`);
@@ -222,12 +232,14 @@ export function renderList(main, { rerender = false } = {}) {
     const s = row && spaces.find((x) => x.id === row.dataset.id);
     if (!s) return;
     if (e.target.closest("[data-remove]")) return removeSpace(main, s);
-    if (e.target.closest("a[target]")) openSpace(s, e);
+    const link = e.target.closest("a[target]");
+    if (link) openSpace(s, e, link.hasAttribute("data-admin"));
   });
   $("#rows", main).addEventListener("auxclick", (e) => {
     const row = e.target.closest(".row");
     const s = row && spaces.find((x) => x.id === row.dataset.id);
-    if (s && e.button === 1 && e.target.closest("a[target]")) openSpace(s, null);
+    const link = e.target.closest("a[target]");
+    if (s && e.button === 1 && link) openSpace(s, null, link.hasAttribute("data-admin"));
   });
 }
 

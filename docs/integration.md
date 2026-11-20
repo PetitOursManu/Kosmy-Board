@@ -42,10 +42,10 @@ Ne jamais afficher le secret une fois enregistré ; permettre de le remplacer.
 ### 1. Lancement : `GET /auth/kosmy-board/login`
 
 Appelé par le bouton « Se connecter avec Kosmy Board » de la page de connexion de l'appli, ou directement par
-le Board (« Ouvrir » : *connexion initiée par un tiers*, OpenID Connect Core § 4) avec deux paramètres :
+le Board (« Ouvrir » ou « Admin » : *connexion initiée par un tiers*, OpenID Connect Core § 4) avec deux paramètres :
 
 - `iss` : l'émetteur. **Refuser** s'il diffère de l'émetteur réglé dans l'appli.
-- `target_link_uri` : la page où arriver ensuite (la page d'admin). **N'accepter qu'une adresse de l'appli elle-même**
+- `target_link_uri` : la page où arriver ensuite (l'accueil de l'appli pour « Ouvrir », sa page d'admin pour « Admin »). **N'accepter qu'une adresse de l'appli elle-même**
   (même origine), sinon aller à la page d'accueil de l'admin : c'est une redirection ouverte sinon.
 
 L'appli prépare alors une demande d'autorisation :
