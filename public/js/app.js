@@ -11,6 +11,7 @@ import { renderEdit } from "./views/edit.js";
 import { renderAccount } from "./views/account.js";
 import { renderSso } from "./views/sso.js";
 import { renderAdmin } from "./views/admin.js";
+import { renderNotifications } from "./views/notifications.js";
 
 /** État partagé par les vues. */
 export const state = {
@@ -19,6 +20,8 @@ export const state = {
   config: { kosmyUrl: "", catalogUrl: "", publicUrl: "" },
   catalog: null,
   spaces: null,
+  /** Notifications non lues (cloche de l'en-tête). */
+  unread: 0,
 };
 
 /** Titre de page animé mot par mot (le HTML ne contient que des <em> et du texte déjà échappé). */
@@ -71,6 +74,15 @@ function updateHeader() {
     if (location.hash.startsWith("#/compte")) acc.setAttribute("aria-current", "page");
   }
 
+  const bell = $("#bell-link");
+  bell.hidden = !state.user;
+  const count = $(".bell-count", bell);
+  count.hidden = !state.unread;
+  count.textContent = state.unread > 99 ? "99+" : String(state.unread);
+  bell.setAttribute("aria-label", state.unread ? t("notifBellUnread", state.unread) : t("notifBell"));
+  if (location.hash.startsWith("#/notifications")) bell.setAttribute("aria-current", "page");
+  else bell.removeAttribute("aria-current");
+
   const status = $("#top-status");
   status.hidden = !state.user || !state.spaces;
   if (state.spaces) {
@@ -79,6 +91,26 @@ function updateHeader() {
   }
 }
 onStatus(() => updateHeader());
+
+/* ---------- Notifications ---------- */
+
+export function setUnread(n) {
+  state.unread = Number(n) || 0;
+  updateHeader();
+}
+
+/** Nombre de non lues : relu au chargement, au retour sur l'onglet et toutes les minutes tant que l'onglet est visible. */
+export async function refreshUnread() {
+  if (!state.user) return;
+  try {
+    // « after » très grand : aucune notification renvoyée, seulement le compteur.
+    const r = await api.get(`api/notifications?after=${Number.MAX_SAFE_INTEGER}`);
+    setUnread(r.unread);
+  } catch { /* on réessaiera */ }
+}
+setInterval(() => {
+  if (document.visibilityState === "visible") refreshUnread();
+}, 60_000);
 
 /* ---------- Routes ---------- */
 
@@ -112,7 +144,10 @@ export async function route() {
   }
 
   await catalog().catch(() => null);
-  if (!state.spaces) await refreshSpaces().catch(() => (state.spaces = []));
+  if (!state.spaces) {
+    await refreshSpaces().catch(() => (state.spaces = []));
+    refreshUnread();
+  }
 
   switch (parts[0]) {
     case "ajouter":
@@ -125,6 +160,8 @@ export async function route() {
       return renderSso(main, { id: parts[1] });
     case "admin":
       return renderAdmin(main, { id: parts[1], section: parts[2] });
+    case "notifications":
+      return renderNotifications(main);
     default:
       return renderList(main, { rerender: sameRoute });
   }
@@ -169,7 +206,9 @@ setUnauthorizedHandler(() => {
 window.addEventListener("hashchange", route);
 /* Retour sur l'onglet du Board : on revérifie les statuts (sur la liste). */
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && state.user && (location.hash === "" || location.hash === "#/")) route();
+  if (document.visibilityState !== "visible" || !state.user) return;
+  if (location.hash === "" || location.hash === "#/") route();
+  else refreshUnread();
 });
 
 (async function boot() {

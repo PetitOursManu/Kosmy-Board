@@ -92,6 +92,22 @@ const MIGRATIONS = [
   `
   ALTER TABLE sessions ADD COLUMN device TEXT;
   `,
+  /* v4 : notifications envoyées par les applis reliées (docs/notifications.md), lues dans le Board et Kosmy Mobile. */
+  `
+  CREATE TABLE notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id TEXT REFERENCES sso_clients(client_id) ON DELETE SET NULL,
+    app_name TEXT NOT NULL,
+    app_id TEXT,
+    title TEXT NOT NULL,
+    body TEXT,
+    url TEXT,
+    created_at INTEGER NOT NULL,
+    read_at INTEGER
+  );
+  CREATE INDEX notifications_user ON notifications(user_id, id);
+  `,
 ];
 
 /** Petites valeurs persistantes (clés de signature, secrets des cookies). */

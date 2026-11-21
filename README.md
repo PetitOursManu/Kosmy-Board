@@ -65,6 +65,16 @@ Applis Kosmy compatibles : Calendy, ClearDoc, Crafty, Dashy, Kanby, Lumy, Mocky 
 Dans Soundy, chaque personne relie d’abord son compte Emby dans les Réglages (« Relier à Kosmy Board »).
 Pour une autre appli : le [guide de l'admin dans le Board](docs/admin-api.md) décrit le protocole, et l'[appli de démonstration](examples/demo-app/server.js) l'implémente.
 
+## Notifications
+
+Une appli reliée par la connexion unique peut vous envoyer des notifications (Soundy : une nouvelle demande de musique).
+Elles arrivent dans la **cloche** de l'en-tête du Board et, avec Kosmy Mobile, sur votre téléphone.
+
+- Seules les personnes qui ont l'instance reliée dans leur Board peuvent en recevoir ; l'appli choisit parmi elles
+  (Soundy ne prévient que les comptes reliés à un administrateur de Soundy).
+- Le Board garde les 200 dernières de chaque personne. **Tout marquer comme lu** et **Tout supprimer** sur la page Notifications.
+- Pour une autre appli : le [guide des notifications](docs/notifications.md).
+
 ## Kosmy Mobile
 
 Dans Kosmy Mobile, onglet **Admin** → **Kosmy Board** → **Se connecter** : l'adresse du Board, l'e-mail et le mot de passe

@@ -12,6 +12,7 @@ import { config } from "./config.js";
 import { db, tx } from "./db.js";
 import { bad, clientIp, HttpError, readJson, sameOrigin, send } from "./http.js";
 import { callApp, cleanActionInput, cleanManifest, cleanResult, cleanSection, SECTION_ID } from "./admin.js";
+import { clientFromBasic, deleteNotifications, listNotifications, markRead, notifyFromClient } from "./notifications.js";
 import { ISSUER, provider } from "./oidc.js";
 import { newRecoveryCodes, newTotpSecret, normalizeRecovery, otpauthUri, verifyTotp } from "./totp.js";
 
@@ -680,6 +681,52 @@ route("POST", /^\/api\/spaces\/([\w-]{1,40})\/admin\/([^/]{1,60})$/, async (req,
   const space = spaceForAdmin(user, id);
   const data = await appCall(req, user, space, { method: "POST", section, body: input });
   send(res, 200, cleanResult(data, space.base, section));
+});
+
+/* ---------- Notifications (docs/notifications.md) ---------- */
+
+/*
+ * Envoi par une appli reliée : identifiant et secret client de sa connexion unique, en « Authorization: Basic ».
+ * Pas de cookie ni de vérification d'origine : c'est un serveur qui appelle, pas un navigateur.
+ */
+route("POST", /^\/api\/apps\/notifications$/, async (req, res) => {
+  const keys = [`app:${clientIp(req)}`];
+  const wait = lockedFor(keys);
+  if (wait) throw new HttpError(429, "locked", { wait });
+  const client = clientFromBasic(req.headers.authorization);
+  if (!client) {
+    recordFailure(keys);
+    res.setHeader("WWW-Authenticate", 'Basic realm="Kosmy Board"');
+    throw new HttpError(401, "client_auth");
+  }
+  const body = await readJson(req, 20_000);
+  send(res, 200, { delivered: notifyFromClient(client, body) });
+}, { auth: false, csrf: false });
+
+const afterParam = (req) => {
+  const v = Number(new URL(req.url, "http://board").searchParams.get("after"));
+  return Number.isSafeInteger(v) && v > 0 ? v : 0;
+};
+
+route("GET", /^\/api\/notifications$/, (req, res, user) => {
+  send(res, 200, listNotifications(user.id, { after: afterParam(req) }));
+});
+
+/* Marquer comme lues : { ids: [...] }, ou toutes sans « ids ». */
+route("POST", /^\/api\/notifications\/read$/, async (req, res, user) => {
+  const body = await readJson(req);
+  markRead(user.id, body.ids);
+  send(res, 200, listNotifications(user.id));
+});
+
+route("DELETE", /^\/api\/notifications$/, (req, res, user) => {
+  deleteNotifications(user.id);
+  send(res, 200, { ok: true });
+});
+
+route("DELETE", /^\/api\/notifications\/(\d{1,15})$/, (req, res, user, [id]) => {
+  deleteNotifications(user.id, Number(id));
+  send(res, 200, { ok: true });
 });
 
 /* ---------- Aiguillage ---------- */

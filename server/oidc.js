@@ -155,6 +155,8 @@ export const provider = new Provider(ISSUER, {
     profile: ["name", "preferred_username", "locale"],
     email: ["email", "email_verified"],
   },
+  /* Extension Kosmy : où une appli reliée envoie ses notifications (docs/notifications.md). */
+  discovery: { claim_types_supported: ["normal"], kosmy_notifications_endpoint: `${config.publicUrl}/api/apps/notifications` },
   /* Les applis lisent souvent l'identité directement dans l'ID token. */
   conformIdTokenClaims: false,
   async findAccount(ctx, id) {

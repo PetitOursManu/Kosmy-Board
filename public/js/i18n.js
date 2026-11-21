@@ -245,6 +245,23 @@ const STR = {
     adminErrorTitle: "L'admin n'a pas pu s'afficher",
 
     /* Erreurs */
+    /* Notifications */
+    notifBell: "Notifications",
+    notifBellUnread: (n) => `Notifications — ${n} non lue${n > 1 ? "s" : ""}`,
+    notifKicker: "(03) — Notifications",
+    notifTitle: "Vos <em>notifications</em>",
+    notifLead: "Ce que vos applis reliées vous signalent (une nouvelle demande dans Soundy…). Kosmy Mobile vous les affiche aussi sur votre téléphone.",
+    notifUnread: "Non lue",
+    notifOpen: "Ouvrir",
+    notifMarkRead: "Marquer comme lue",
+    notifRemove: "Supprimer cette notification",
+    notifAllRead: "Tout marquer comme lu",
+    notifClear: "Tout supprimer",
+    notifClearTitle: "Supprimer toutes les notifications ?",
+    notifClearText: "Elles disparaissent aussi de Kosmy Mobile. Les applis n'en sont pas averties.",
+    notifEmpty: "Aucune notification.",
+    notifEmptyHint: "Une appli reliée par la connexion unique (Soundy par exemple) peut vous envoyer des notifications : elles arrivent ici et sur Kosmy Mobile.",
+
     errors: {
       code: "Ce code n'est pas le bon (ou il a déjà servi).",
       ticket: "La connexion a expiré. Recommencez avec votre mot de passe.",
@@ -271,6 +288,7 @@ const STR = {
       already_setup: "Le Board est déjà configuré. Connectez-vous.",
       login_failed: "E-mail ou mot de passe incorrect.",
       locked: (e) => `Trop de tentatives. Réessayez dans ${Math.ceil(e.wait / 60)} min.`,
+      rate_limited: "Trop de notifications d'un coup : réessayez dans une minute.",
       current_password: "Le mot de passe actuel n'est pas le bon.",
       invite_invalid: "Ce lien d'invitation n'est plus valable.",
       email_taken: "Un compte existe déjà avec cette adresse e-mail.",
@@ -530,6 +548,23 @@ const STR = {
     adminAppSays: "The app says:",
     adminErrorTitle: "The admin couldn't be shown",
 
+    /* Notifications */
+    notifBell: "Notifications",
+    notifBellUnread: (n) => `Notifications — ${n} unread`,
+    notifKicker: "(03) — Notifications",
+    notifTitle: "Your <em>notifications</em>",
+    notifLead: "What your linked apps tell you (a new request in Soundy…). Kosmy Mobile also shows them on your phone.",
+    notifUnread: "Unread",
+    notifOpen: "Open",
+    notifMarkRead: "Mark as read",
+    notifRemove: "Delete this notification",
+    notifAllRead: "Mark all as read",
+    notifClear: "Delete all",
+    notifClearTitle: "Delete all notifications?",
+    notifClearText: "They also disappear from Kosmy Mobile. The apps are not told.",
+    notifEmpty: "No notifications.",
+    notifEmptyHint: "An app linked with single sign-on (Soundy for example) can send you notifications: they show up here and on Kosmy Mobile.",
+
     errors: {
       code: "This code is wrong (or was already used).",
       ticket: "Sign-in expired. Start again with your password.",
@@ -556,6 +591,7 @@ const STR = {
       already_setup: "The Board is already set up. Sign in.",
       login_failed: "Wrong email or password.",
       locked: (e) => `Too many attempts. Try again in ${Math.ceil(e.wait / 60)} min.`,
+      rate_limited: "Too many notifications at once: try again in a minute.",
       current_password: "The current password is wrong.",
       invite_invalid: "This invitation link is no longer valid.",
       email_taken: "An account already exists with this email address.",
