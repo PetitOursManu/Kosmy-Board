@@ -11,6 +11,7 @@ import {
 import { config } from "./config.js";
 import { db, tx } from "./db.js";
 import { bad, clientIp, HttpError, readJson, sameOrigin, send } from "./http.js";
+import { callApp, cleanActionInput, cleanManifest, cleanResult, cleanSection, SECTION_ID } from "./admin.js";
 import { ISSUER, provider } from "./oidc.js";
 import { newRecoveryCodes, newTotpSecret, normalizeRecovery, otpauthUri, verifyTotp } from "./totp.js";
 
@@ -639,6 +640,46 @@ route("DELETE", /^\/api\/spaces\/([\w-]{1,40})\/sso$/, (req, res, user, [id]) =>
     dropOrphanClient(client.client_id);
   });
   send(res, 200, { ok: true });
+});
+
+/* ---------- Admin dans le Board (docs/admin-api.md) ---------- */
+
+/** L'admin dans le Board passe par la connexion unique : l'appli reconnaît la personne par son « sub ». */
+function spaceForAdmin(user, id) {
+  const space = getSpace(user.id, id);
+  if (!space) throw new HttpError(404, "not_found");
+  if (!space.client_id) throw new HttpError(409, "admin_no_sso");
+  return space;
+}
+/** Langue de l'interface (?lang=), sinon celle du compte. */
+function adminLang(req, user) {
+  const q = new URL(req.url, "http://board").searchParams.get("lang");
+  return cleanLang(q) ?? user.lang ?? "fr";
+}
+function sectionId(v) {
+  if (!SECTION_ID.test(v)) throw new HttpError(404, "admin_not_found");
+  return v;
+}
+const appCall = (req, user, space, opts) =>
+  callApp({ base: space.base, clientId: space.client_id, user, lang: adminLang(req, user), ...opts });
+
+route("GET", /^\/api\/spaces\/([\w-]{1,40})\/admin$/, async (req, res, user, [id]) => {
+  const space = spaceForAdmin(user, id);
+  send(res, 200, cleanManifest(await appCall(req, user, space, {})));
+});
+
+route("GET", /^\/api\/spaces\/([\w-]{1,40})\/admin\/([^/]{1,60})$/, async (req, res, user, [id, sec]) => {
+  const section = sectionId(sec);
+  const space = spaceForAdmin(user, id);
+  send(res, 200, cleanSection(await appCall(req, user, space, { section }), space.base, section));
+});
+
+route("POST", /^\/api\/spaces\/([\w-]{1,40})\/admin\/([^/]{1,60})$/, async (req, res, user, [id, sec]) => {
+  const section = sectionId(sec);
+  const input = cleanActionInput(await readJson(req, 500_000));
+  const space = spaceForAdmin(user, id);
+  const data = await appCall(req, user, space, { method: "POST", section, body: input });
+  send(res, 200, cleanResult(data, space.base, section));
 });
 
 /* ---------- Aiguillage ---------- */

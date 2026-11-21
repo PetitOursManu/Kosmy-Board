@@ -5,6 +5,7 @@
  *   node examples/demo-app/server.js        → http://localhost:8768
  *
  * Réglages : page /settings (comme dans une vraie appli), gardés dans examples/demo-app/settings.json.
+ * Admin dans le Board : /api/kosmy-board/admin (docs/admin-api.md), en bas de ce fichier.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -14,15 +15,24 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const PORT = Number(process.env.PORT) || 8768;
 const BASE = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/+$/, "");
-const SETTINGS_FILE = new URL("./settings.json", import.meta.url);
+const SETTINGS_FILE = process.env.DEMO_SETTINGS || new URL("./settings.json", import.meta.url);
 const CALLBACK = `${BASE}/auth/kosmy-board/callback`;
 
-let settings = { issuer: "http://localhost:8767/oidc", clientId: "", clientSecret: "" };
-try { settings = { ...settings, ...JSON.parse(readFileSync(SETTINGS_FILE, "utf8")) }; } catch { /* premier lancement */ }
+let settings = {
+  issuer: "http://localhost:8767/oidc", clientId: "", clientSecret: "",
+  // Réglages propres à l'appli, modifiables depuis son admin (et donc depuis le Board).
+  site: { name: "Démo", welcome: "Bienvenue sur l'appli de démonstration.", signup: false, theme: "cyan", maxUsers: 10 },
+  // Comptes de l'appli reliés à un compte du Board (clé : « sub »). Le premier relié est administrateur.
+  accounts: {},
+};
+try {
+  const saved = JSON.parse(readFileSync(SETTINGS_FILE, "utf8"));
+  settings = { ...settings, ...saved, site: { ...settings.site, ...saved.site }, accounts: saved.accounts ?? {} };
+} catch { /* premier lancement */ }
+const save = () => writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 
 const sessions = new Map(); // jeton → { sub, name, email, at }
 const pending = new Map(); // state → { verifier, nonce, target, exp }
-const linked = new Map(); // sub du Board → compte local (ici : un simple nom)
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const b64url = (buf) => buf.toString("base64url");
@@ -138,7 +148,11 @@ async function callback(req, res, url) {
     return send(res, 400, layout("Erreur", `<p class="err">Nonce invalide.</p>`));
   }
   // Les comptes se relient par « sub » (identifiant stable du Board), jamais par l'e-mail (non vérifié).
-  if (!linked.has(payload.sub)) linked.set(payload.sub, payload.name || payload.email);
+  if (!settings.accounts[payload.sub]) {
+    const first = Object.keys(settings.accounts).length === 0;
+    settings.accounts[payload.sub] = { name: payload.name || payload.email, email: payload.email, role: first ? "admin" : "member", linkedAt: Date.now() };
+    save();
+  }
   const sid = b64url(randomBytes(24));
   sessions.set(sid, { sub: payload.sub, name: payload.name, email: payload.email, at: Date.now() });
   redirect(res, p.target, { "Set-Cookie": `demo_session=${sid}; Path=/; HttpOnly; SameSite=Lax` });
@@ -151,14 +165,15 @@ const server = http.createServer(async (req, res) => {
   try {
     if (url.pathname === "/auth/kosmy-board/login") return await startLogin(req, res, url);
     if (url.pathname === "/auth/kosmy-board/callback") return await callback(req, res, url);
+    if (url.pathname === ADMIN_PATH || url.pathname.startsWith(`${ADMIN_PATH}/`)) return await boardAdmin(req, res, url);
 
     if (url.pathname === "/settings") {
       if (req.method === "POST") {
         let body = "";
         for await (const c of req) body += c;
         const f = new URLSearchParams(body);
-        settings = { issuer: f.get("issuer").trim().replace(/\/+$/, ""), clientId: f.get("clientId").trim(), clientSecret: f.get("clientSecret").trim() || settings.clientSecret };
-        writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+        settings = { ...settings, issuer: f.get("issuer").trim().replace(/\/+$/, ""), clientId: f.get("clientId").trim(), clientSecret: f.get("clientSecret").trim() || settings.clientSecret };
+        save();
         discovery = null;
         return redirect(res, "/login");
       }
@@ -181,7 +196,8 @@ const server = http.createServer(async (req, res) => {
     const user = currentUser(req);
     if (url.pathname === "/admin" || url.pathname === "/") {
       if (!user) return redirect(res, "/login");
-      return send(res, 200, layout("Admin", `<div class="card"><h1>Administration</h1>
+      return send(res, 200, layout("Admin", `<div class="card"><h1>${esc(settings.site.name)} · administration</h1>
+        <p>${esc(settings.site.welcome)}</p>
         <p>Bonjour <b>${esc(user.name)}</b> : vous êtes connecté avec Kosmy Board, sans mot de passe propre à cette appli.</p>
         <p><small>Identifiant Kosmy Board (sub) : <code>${esc(user.sub)}</code><br>E-mail : ${esc(user.email)}</small></p>
         <form method="post" action="/logout"><button class="btn ghost" type="submit">Se déconnecter de la démo</button></form></div>
@@ -202,5 +218,208 @@ const server = http.createServer(async (req, res) => {
     send(res, 500, layout("Erreur", `<p class="err">${esc(e.message)}</p>`));
   }
 });
+
+/* ---------- Admin dans le Board (docs/admin-api.md) ---------- */
+
+const ADMIN_PATH = "/api/kosmy-board/admin";
+const PROTOCOL = "kosmy.board-admin.v1";
+const seenJti = new Map(); // jti → expiration (ms) : un jeton ne sert qu'une fois
+
+function json(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(JSON.stringify(body));
+}
+class AdminError extends Error {
+  constructor(status, code, message) {
+    super(code);
+    Object.assign(this, { status, code, userMessage: message });
+  }
+}
+
+/**
+ * Vérifie le jeton du Board et renvoie le compte de l'appli relié à la personne.
+ * Ordre : signature (clés de la connexion unique), typ, iss, aud, exp, htm, htu, jti, puis sub → compte → droits.
+ */
+async function adminAuth(req, url) {
+  const m = /^Bearer\s+([\w.-]+)$/i.exec(req.headers.authorization || "");
+  if (!m || !settings.clientId) throw new AdminError(401, "invalid_token");
+  const d = await discover();
+  let payload;
+  try {
+    ({ payload } = await jwtVerify(m[1], jwks, {
+      issuer: d.issuer,
+      audience: settings.clientId,
+      typ: "kb-admin+jwt",
+      algorithms: ["RS256"],
+      clockTolerance: 30,
+      maxTokenAge: "2 minutes",
+    }));
+  } catch {
+    throw new AdminError(401, "invalid_token");
+  }
+  let htuPath = "";
+  try { htuPath = new URL(payload.htu).pathname; } catch { /* refusé juste en dessous */ }
+  if (payload.htm !== req.method || !htuPath.endsWith(url.pathname)) throw new AdminError(401, "invalid_token");
+  const now = Date.now();
+  for (const [k, exp] of seenJti) if (exp < now) seenJti.delete(k);
+  if (typeof payload.jti !== "string" || seenJti.has(payload.jti)) throw new AdminError(401, "invalid_token");
+  seenJti.set(payload.jti, (payload.exp ?? 0) * 1000 + 30_000);
+
+  // Le Board dit qui est la personne ; les droits, c'est l'appli qui les donne.
+  const account = settings.accounts[payload.sub];
+  if (!account) throw new AdminError(403, "not_linked", "Ce compte Kosmy Board n'est relié à aucun compte de la démo : connectez-vous une fois à la démo avec le Board.");
+  if (account.role !== "admin") throw new AdminError(403, "forbidden", "Votre compte de la démo n'a pas les droits d'administration.");
+  return { sub: payload.sub, account };
+}
+
+const ROLE = { admin: "Administrateur", member: "Membre" };
+
+/** Les sections, décrites pour le Board : il les affiche, la démo garde ses règles. */
+function section(id, me) {
+  const accounts = Object.entries(settings.accounts);
+  switch (id) {
+    case "overview":
+      return {
+        id, title: "Vue d'ensemble",
+        blocks: [
+          ...(settings.site.signup ? [{ type: "notice", tone: "warning", title: "Inscriptions ouvertes", text: "N'importe qui peut créer un compte sur cette instance." }] : []),
+          { type: "stats", items: [
+            { label: "Comptes reliés", value: accounts.length, hint: `${settings.site.maxUsers} au plus` },
+            { label: "Administrateurs", value: accounts.filter(([, a]) => a.role === "admin").length },
+            { label: "Sessions ouvertes", value: sessions.size },
+          ] },
+          { type: "fields", title: "Instance", items: [
+            { label: "Adresse", value: BASE },
+            { label: "Émetteur OpenID Connect", value: settings.issuer },
+            { label: "Node.js", value: process.version },
+          ] },
+        ],
+      };
+    case "users":
+      return {
+        id, title: "Comptes", description: "Les comptes de la démo reliés à un compte Kosmy Board.",
+        blocks: [{
+          type: "table", id: "accounts",
+          columns: [{ key: "name", label: "Nom" }, { key: "email", label: "E-mail" }, { key: "role", label: "Rôle" }, { key: "linked", label: "Relié le" }],
+          rows: accounts.map(([sub, a]) => ({
+            id: sub,
+            cells: {
+              name: sub === me ? `${a.name} (vous)` : a.name,
+              email: a.email ?? "",
+              role: { text: ROLE[a.role], tone: a.role === "admin" ? "success" : "muted" },
+              linked: new Date(a.linkedAt).toLocaleDateString("fr-FR"),
+            },
+            // On ne se retire pas soi-même ses droits : il pourrait ne plus rester d'administrateur.
+            actions: sub === me ? [] : [a.role === "admin" ? "make-member" : "make-admin", "unlink"],
+          })),
+          rowActions: [
+            { id: "make-admin", label: "Rendre administrateur" },
+            { id: "make-member", label: "Retirer les droits" },
+            { id: "unlink", label: "Délier", danger: true, confirm: "Ce compte ne pourra plus se connecter à la démo avec le Board." },
+          ],
+          actions: [{ id: "invite", label: "Créer une invitation", fields: [
+            { name: "email", label: "E-mail", type: "email", required: true },
+            { name: "role", label: "Rôle", type: "select", value: "member", options: [{ value: "member", label: "Membre" }, { value: "admin", label: "Administrateur" }] },
+          ] }],
+          empty: "Aucun compte relié.",
+        }],
+      };
+    case "settings":
+      return {
+        id, title: "Réglages",
+        blocks: [{
+          type: "form", id: "site", action: "save", title: "Site", submit: "Enregistrer",
+          fields: [
+            { name: "name", label: "Nom du site", type: "text", value: settings.site.name, required: true, maxLength: 60 },
+            { name: "welcome", label: "Message d'accueil", type: "textarea", value: settings.site.welcome, maxLength: 500, help: "Affiché en haut de la page d'admin." },
+            { name: "theme", label: "Couleur", type: "select", value: settings.site.theme, options: [{ value: "cyan", label: "Cyan" }, { value: "lime", label: "Citron vert" }, { value: "orange", label: "Orange" }] },
+            { name: "maxUsers", label: "Comptes au plus", type: "number", value: settings.site.maxUsers, min: 1, max: 1000 },
+            { name: "signup", label: "Inscriptions ouvertes", type: "checkbox", value: settings.site.signup },
+          ],
+        }],
+      };
+    case "maintenance":
+      return {
+        id, title: "Maintenance",
+        blocks: [{ type: "actions", items: [
+          { id: "logout-all", label: "Fermer toutes les sessions", description: `${sessions.size} session(s) ouverte(s) dans la démo.`, danger: true, confirm: "Tout le monde devra se reconnecter à la démo." },
+        ] }],
+      };
+    default:
+      return null;
+  }
+}
+const SECTIONS = ["overview", "users", "settings", "maintenance"];
+
+/** Une action envoyée par le Board : revérifiée ici, comme si elle venait de l'admin de la démo. */
+function act(id, body, me) {
+  const fail = (message) => { throw new AdminError(422, "invalid", message); };
+  const v = body.values ?? {};
+  if (id === "users") {
+    if (body.action === "invite") {
+      if (typeof v.email !== "string" || !/^[^\s@]+@[^\s@]+$/.test(v.email)) fail("Adresse e-mail invalide.");
+      const link = `${BASE}/login?invitation=${b64url(randomBytes(12))}`;
+      return { message: `Invitation créée pour ${v.email}.`, reveal: { label: "Lien d'invitation", value: link } };
+    }
+    const a = settings.accounts[body.row];
+    if (!a) throw new AdminError(404, "not_found", "Ce compte n'existe plus.");
+    if (body.row === me) fail("Vous ne pouvez pas modifier votre propre compte.");
+    if (body.action === "make-admin") a.role = "admin";
+    else if (body.action === "make-member") a.role = "member";
+    else if (body.action === "unlink") {
+      delete settings.accounts[body.row];
+      for (const [sid, s] of sessions) if (s.sub === body.row) sessions.delete(sid);
+    } else throw new AdminError(404, "not_found");
+    save();
+    return { message: "Compte mis à jour." };
+  }
+  if (id === "settings" && body.action === "save") {
+    const name = typeof v.name === "string" ? v.name.trim() : "";
+    if (!name || name.length > 60) fail("Le nom du site est obligatoire (60 caractères au plus).");
+    const max = Number(v.maxUsers);
+    if (!Number.isInteger(max) || max < 1 || max > 1000) fail("Le nombre de comptes doit être entre 1 et 1000.");
+    if (!["cyan", "lime", "orange"].includes(v.theme)) fail("Couleur inconnue.");
+    settings.site = { name, welcome: String(v.welcome ?? "").slice(0, 500), theme: v.theme, maxUsers: max, signup: v.signup === true };
+    save();
+    return { message: "Réglages enregistrés." };
+  }
+  if (id === "maintenance" && body.action === "logout-all") {
+    const n = sessions.size;
+    sessions.clear();
+    return { message: `${n} session(s) fermée(s).` };
+  }
+  throw new AdminError(404, "not_found");
+}
+
+async function boardAdmin(req, res, url) {
+  try {
+    const { sub, account } = await adminAuth(req, url);
+    const id = url.pathname.slice(ADMIN_PATH.length + 1);
+    if (!id) {
+      if (req.method !== "GET") throw new AdminError(405, "method");
+      return json(res, 200, {
+        protocol: PROTOCOL,
+        app: { name: settings.site.name, version: "1.0.0" },
+        user: { name: account.name, role: ROLE[account.role] },
+        sections: SECTIONS.map((s) => ({ id: s, title: section(s, sub).title })),
+      });
+    }
+    if (!SECTIONS.includes(id)) throw new AdminError(404, "not_found");
+    if (req.method === "GET") return json(res, 200, section(id, sub));
+    if (req.method !== "POST") throw new AdminError(405, "method");
+    let raw = "";
+    for await (const c of req) {
+      raw += c;
+      if (raw.length > 500_000) throw new AdminError(413, "too_large");
+    }
+    let body;
+    try { body = JSON.parse(raw); } catch { throw new AdminError(400, "invalid", "Requête illisible."); }
+    const result = act(id, body ?? {}, sub);
+    json(res, 200, { ok: true, ...result, section: section(id, sub) });
+  } catch (e) {
+    if (!(e instanceof AdminError)) throw e;
+    json(res, e.status, { error: e.code, ...(e.userMessage ? { message: e.userMessage } : {}) });
+  }
+}
 
 server.listen(PORT, () => console.log(`Appli de démo : ${BASE} (émetteur : ${settings.issuer || "à régler"})`));
