@@ -223,7 +223,8 @@ Une action (`rowActions`, `actions`, ou bloc `actions`) :
 `min`/`max`/`step` (`number`), `maxLength` (textes), `options` (`select`, 200 au plus).
 
 Types : `text`, `textarea`, `email`, `url`, `number`, `password`, `select`, `checkbox`.
-Un champ `password` n'a jamais de `value` : vide à l'envoi, il veut dire « ne pas changer ».
+Un champ `password` n'a jamais de `value`. Vide à l'envoi, dans un bloc `form`, il veut dire « ne pas changer » ;
+dans la fenêtre d'une action, c'est l'appli qui décide (souvent « en générer un », montré ensuite par `reveal`) : le dire dans `help`.
 
 ## Une action : `POST /api/kosmy-board/admin/{section}`
 
