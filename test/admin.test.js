@@ -78,9 +78,10 @@ test("sommaire et sections", async () => {
   const table = users.body.blocks[0];
   assert.equal(table.type, "table");
   assert.equal(table.rows.length, 2);
-  // Pas d'action sur son propre compte, et les actions inconnues des lignes sont écartées.
-  assert.equal(table.rows.find((r) => r.id === adminId).actions, undefined);
-  assert.deepEqual(table.rows.find((r) => r.id === memberId).actions, ["make-admin", "unlink"]);
+  // Sur son propre compte, seulement « Renommer ».
+  assert.deepEqual(table.rows.find((r) => r.id === adminId).actions, ["rename"]);
+  assert.deepEqual(table.rows.find((r) => r.id === memberId).actions, ["rename", "make-admin", "unlink"]);
+  assert.deepEqual(table.rows.find((r) => r.id === memberId).values, { name: "M" });
 
   const settings = await admin.request("GET", `/api/spaces/${spaceId}/admin/settings`);
   const form = settings.body.blocks[0];

@@ -213,6 +213,18 @@ function cell(v, base) {
   return "";
 }
 
+/** Valeurs d'une ligne, qui pré-remplissent les champs de ses actions (par nom de champ). */
+function rowValues(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const out = {};
+  for (const [k, x] of Object.entries(v).slice(0, 60)) {
+    if (!ACTION_ID.test(k)) continue;
+    if (typeof x === "boolean" || (typeof x === "number" && Number.isFinite(x))) out[k] = x;
+    else if (typeof x === "string") out[k] = text(x, 2000);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 function items(v, max = 24) {
   return list(v, max)
     .map((i) => (i && typeof i === "object" ? strip({ label: text(i.label, 120), value: text(i.value, 2000), hint: text(i.hint, 200) || undefined }) : null))
@@ -253,7 +265,8 @@ function block(b, base) {
           const cells = {};
           for (const c of columns) cells[c.key] = cell(r.cells?.[c.key], base);
           const ra = list(r.actions, 20).filter((a) => typeof a === "string" && known.has(a));
-          return { id: rid, cells, ...(ra.length ? { actions: [...new Set(ra)] } : {}) };
+          const values = rowValues(r.values);
+          return { id: rid, cells, ...(ra.length ? { actions: [...new Set(ra)] } : {}), ...(values ? { values } : {}) };
         })
         .filter(Boolean);
       return strip({

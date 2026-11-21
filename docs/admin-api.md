@@ -88,6 +88,7 @@ Toujours en JSON : `{ "error": "<code>", "message": "<texte lisible, facultatif>
 | `403` | `forbidden` | Le compte relié n'a pas les droits d'administration. |
 | `404` | `not_found` | Section, ligne ou action inconnue. |
 | `400`, `409`, `422` | au choix | Saisie refusée, conflit… avec un `message` à montrer. |
+| `405` | `method_not_allowed` | Méthode non prise en charge (le Board la traite comme une adresse inconnue). |
 | `503` | au choix | L'appli n'arrive pas à joindre le Board (découverte, clés) pour vérifier le jeton. |
 
 ## Le sommaire : `GET /api/kosmy-board/admin`
@@ -187,10 +188,12 @@ Envoie `{ "action": "save-general", "values": { … } }` (voir plus bas).
 
 - `rowActions` décrit les actions possibles ; chaque ligne liste dans `actions` celles qui la concernent
   (sans `actions`, une ligne n'en a aucune). `actions` (au niveau du tableau) : boutons au-dessus de la liste.
+- Une ligne peut avoir des `values` (`{ "nom du champ": valeur }`) : elles pré-remplissent les champs du même nom
+  de ses actions (par exemple le nom actuel pour « Renommer »). Jamais pour un champ `password`.
 - 500 lignes et 12 colonnes au plus. Au-delà de 10 lignes, le Board ajoute une recherche.
 - Une cellule est un texte, un nombre, un booléen, `null`, ou `{ "text", "tone", "href" }` :
   `tone` affiche une pastille (`success`, `warning`, `danger`, `muted`), et `href`, une adresse **de l'instance
-  elle-même** (même origine), un lien qui s'ouvre dans un nouvel onglet.
+  elle-même** (absolue de même origine, ou relative à l'adresse de l'instance), un lien qui s'ouvre dans un nouvel onglet.
 
 ### `actions` : des boutons
 
@@ -207,7 +210,7 @@ Une action (`rowActions`, `actions`, ou bloc `actions`) :
 
 | Champ | Rôle |
 | --- | --- |
-| `id` | Identifiant, renvoyé à l'appli (`[A-Za-z0-9_.:-]{1,64}`). |
+| `id` | Identifiant, renvoyé à l'appli (`[A-Za-z0-9_.:-]{1,64}`). **Unique dans toute la section** : l'action envoyée ne dit pas de quel bloc elle vient. |
 | `label` | Texte du bouton. |
 | `description` | Facultatif, sous le bouton (bloc `actions`). |
 | `danger` | Bouton rouge. |

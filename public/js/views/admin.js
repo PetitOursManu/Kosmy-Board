@@ -321,7 +321,11 @@ function showSection(main, space, sectionId, data) {
     const label = row ? `${a.label} — ${row.label}` : a.label;
     let values;
     if (a.fields?.length) {
-      values = await fieldsDialog({ title: label, text: a.confirm, fields: a.fields, ok: a.label, danger: a.danger });
+      // Les valeurs de la ligne pré-remplissent les champs du même nom (sauf les mots de passe).
+      const fields = row?.values
+        ? a.fields.map((f) => (f.type !== "password" && f.name in row.values ? { ...f, value: row.values[f.name] } : f))
+        : a.fields;
+      values = await fieldsDialog({ title: label, text: a.confirm, fields, ok: a.label, danger: a.danger });
       if (!values) return;
     } else if (a.confirm || a.danger) {
       const ok = await confirmBox({ title: `${label}${lang === "fr" ? " ?" : "?"}`, text: a.confirm ?? "", ok: a.label, danger: a.danger });
@@ -346,7 +350,7 @@ function showSection(main, space, sectionId, data) {
     if (b.type === "table" && btn.dataset.row !== undefined) {
       const r = b.rows[Number(btn.dataset.row)];
       const a = b.rowActions.find((x) => x.id === aid);
-      if (r && a) trigger(a, btn, { id: r.id, label: cellText(r.cells[b.columns[0].key]) });
+      if (r && a) trigger(a, btn, { id: r.id, label: cellText(r.cells[b.columns[0].key]), values: r.values });
     } else {
       const a = (b.type === "table" ? b.actions : b.items)?.find((x) => x.id === aid);
       if (a) trigger(a, btn);

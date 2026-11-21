@@ -310,11 +310,14 @@ function section(id, me) {
               linked: new Date(a.linkedAt).toLocaleDateString("fr-FR"),
             },
             // On ne se retire pas soi-même ses droits : il pourrait ne plus rester d'administrateur.
-            actions: sub === me ? [] : [a.role === "admin" ? "make-member" : "make-admin", "unlink"],
+            actions: sub === me ? ["rename"] : ["rename", a.role === "admin" ? "make-member" : "make-admin", "unlink"],
+            // Pré-remplit le champ « name » de l'action « Renommer ».
+            values: { name: a.name },
           })),
           rowActions: [
             { id: "make-admin", label: "Rendre administrateur" },
             { id: "make-member", label: "Retirer les droits" },
+            { id: "rename", label: "Renommer", fields: [{ name: "name", label: "Nom", type: "text", required: true, maxLength: 80 }] },
             { id: "unlink", label: "Délier", danger: true, confirm: "Ce compte ne pourra plus se connecter à la démo avec le Board." },
           ],
           actions: [{ id: "invite", label: "Créer une invitation", fields: [
@@ -363,6 +366,13 @@ function act(id, body, me) {
     }
     const a = settings.accounts[body.row];
     if (!a) throw new AdminError(404, "not_found", "Ce compte n'existe plus.");
+    if (body.action === "rename") {
+      const name = typeof v.name === "string" ? v.name.trim() : "";
+      if (!name || name.length > 80) fail("Le nom est obligatoire (80 caractères au plus).");
+      a.name = name;
+      save();
+      return { message: "Compte renommé." };
+    }
     if (body.row === me) fail("Vous ne pouvez pas modifier votre propre compte.");
     if (body.action === "make-admin") a.role = "admin";
     else if (body.action === "make-member") a.role = "member";
