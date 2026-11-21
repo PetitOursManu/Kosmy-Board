@@ -10,6 +10,8 @@ avec la même identité visuelle que le site Kosmy.
 - **Statut** : « joignable » ou « injoignable », vérifié depuis votre navigateur. C'est une indication, pas un contrôle d'accès.
 - **Connexion unique** : le Board est un fournisseur d'identité OpenID Connect. Une appli reliée
   propose « Se connecter avec Kosmy Board », et « Ouvrir » vous y connecte directement.
+- **Admin dans le Board** : une fois reliée, une instance s'administre depuis le Board lui-même
+  (comptes, réglages, maintenance…), sans ouvrir l'appli.
 - **Double authentification** (TOTP, avec codes de secours) pour les comptes du Board.
 - **Synchronisation avec Kosmy Mobile** : on se connecte une fois dans l'onglet Admin de l'appli, et les espaces sont les mêmes partout.
 - **Export / import** en JSON, au format des espaces admin de Kosmy Mobile.
@@ -43,6 +45,24 @@ Avec la connexion unique, il suffit d'être connecté au Board : plus de mot de 
 - Se déconnecter du Board coupe les nouvelles connexions aux applis (les sessions déjà ouvertes dans les applis restent ouvertes).
 - L'appli doit savoir se connecter avec OpenID Connect. Pour les applis Kosmy, voir le
   [guide d'intégration](docs/integration.md) ; l'[appli de démonstration](examples/demo-app/server.js) en est l'implémentation de référence.
+
+## Admin dans le Board
+
+Pour une instance reliée par la connexion unique, **Admin** affiche son administration dans le Board :
+les sections que l'appli propose (vue d'ensemble, comptes, réglages, maintenance…), ses formulaires, ses listes et ses actions.
+
+- C'est l'appli qui décrit ses écrans et qui décide : le Board les affiche et lui transmet vos actions.
+  Elle vérifie à chaque fois que votre compte Kosmy Board est relié à un compte **administrateur** de l'appli.
+- Le serveur du Board appelle l'appli avec un jeton signé, valable 60 secondes pour une seule requête :
+  toujours aucun mot de passe, ni cookie de l'instance, ne passe par le Board.
+- **Le serveur du Board doit pouvoir joindre l'instance** à l'adresse saisie dans le Board
+  (c'est lui qui l'appelle, pas votre navigateur). Les instances peuvent être sur un autre domaine que le Board.
+- Ce que le Board ne sait pas afficher (envoi de fichiers, glisser-déposer, éditeurs riches) reste dans l'appli :
+  **Ouvrir l'admin de l'appli ↗** ouvre son admin dans un onglet, comme avant.
+- Une appli qui ne propose pas encore l'admin dans le Board : le Board le dit, et propose de l'ouvrir dans un onglet.
+
+Applis Kosmy compatibles : Calendy, ClearDoc, Crafty, Dashy, Kanby, Lumy, Mocky (avec la connexion unique réglée).
+Pour une autre appli : le [guide de l'admin dans le Board](docs/admin-api.md) décrit le protocole, et l'[appli de démonstration](examples/demo-app/server.js) l'implémente.
 
 ## Kosmy Mobile
 
@@ -113,9 +133,11 @@ npm test                             # API, connexion unique de bout en bout, do
 Pour essayer la connexion unique en local : ajoutez l'espace `http://localhost:8768` (page `/admin`) dans le Board,
 activez sa connexion unique avec l'adresse de retour `http://localhost:8768/auth/kosmy-board/callback`
 et l'adresse de lancement `http://localhost:8768/auth/kosmy-board/login`, puis collez les réglages
-dans `http://localhost:8768/settings`.
+dans `http://localhost:8768/settings`. Connectez-vous une fois à la démo par le Board (le premier compte relié
+y est administrateur) : **Admin** affiche alors son administration dans le Board.
 
-- `server/` : serveur HTTP (`node:http`, `node:sqlite`, `node:crypto`) ; `server/oidc.js` pour la connexion unique.
+- `server/` : serveur HTTP (`node:http`, `node:sqlite`, `node:crypto`) ; `server/oidc.js` pour la connexion unique,
+  `server/admin.js` pour l'admin dans le Board.
 - `public/` : l'interface, en HTML, CSS et JavaScript (modules ES), sans étape de build.
 - `public/js/normalize.js` est partagé par l'interface et le serveur.
 - `public/js/catalog-fallback.json` et `public/assets/logos/` : copie de secours du catalogue de Kosmy Mobile.
@@ -130,6 +152,9 @@ dans `http://localhost:8768/settings`.
 - Double authentification TOTP (RFC 6238) ; codes de secours à usage unique, stockés hachés ; un code accepté ne repasse pas.
 - Connexion unique : code d'autorisation, PKCE, ID token signé RS256 ; clés et secrets des cookies créés au premier
   lancement et gardés dans la base. Les secrets des clients sont montrés une seule fois.
+- Admin dans le Board : jeton JWT RS256 (`typ: kb-admin+jwt`, distinct des ID tokens) lié à la méthode et à l'adresse
+  appelées, 60 secondes, usage unique ; seulement pour un espace relié de la personne. L'appli revérifie les droits.
+  Les réponses de l'appli sont réduites à un format strict et affichées en texte brut ; redirections non suivies, 2 Mo et 15 s au plus.
 - CSP stricte, pas d'iframe, pas de script tiers, `Referrer-Policy: no-referrer`.
 
 Sauvegardez le dossier `/data` : il contient les comptes, les espaces et les clés de signature OpenID Connect.

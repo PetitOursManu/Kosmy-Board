@@ -7,6 +7,9 @@ fournisseur « générique » (Authentik, Keycloak…) n'a besoin d'aucun code e
 
 L'implémentation de référence est [`examples/demo-app/server.js`](../examples/demo-app/server.js) : un seul fichier, sans framework.
 
+Une fois la connexion unique en place, l'appli peut aussi s'administrer depuis le Board : voir
+[L'admin dans le Board](admin-api.md).
+
 ## Ce que l'administrateur de l'appli fait
 
 1. Dans le Board, il ajoute l'instance, puis ouvre **Modifier → Connexion unique** et active la connexion unique.
