@@ -548,3 +548,34 @@ textarea.input { resize: vertical; min-height: 48px; font-size: 15px; font-famil
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Notifications ---------- */
+.bell {
+  position: relative; display: grid; place-items: center; width: 38px; height: 38px; flex: none;
+  border: 1px solid var(--line); border-radius: 50%; color: var(--mute); transition: color .2s, border-color .2s, background .2s;
+}
+.bell:hover, .bell[aria-current="page"] { color: var(--paper); border-color: var(--line-strong); }
+.bell[aria-current="page"] { background: var(--panel); }
+.bell-count {
+  position: absolute; top: -5px; right: -7px; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 999px;
+  display: grid; place-items: center; background: var(--signal); color: var(--bg); font-size: 10px; font-weight: 600; line-height: 1;
+}
+.bell-count[hidden] { display: none; }
+.notifs { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.notif {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: start;
+  padding: 22px 0; border-bottom: 1px solid var(--line);
+}
+.notif-main { min-width: 0; }
+.notif-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--mute); margin: 0 0 6px; }
+.notif-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--signal); }
+.notif-title { margin: 0; font-size: 18px; line-height: 1.35; color: var(--mute); overflow-wrap: anywhere; }
+.notif.unread .notif-title { color: var(--paper); font-weight: 500; }
+.notif-body { margin: 6px 0 0; color: var(--mute); line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+.notif-actions { display: flex; align-items: center; gap: 16px; white-space: nowrap; }
+.notif-empty { padding: 48px 0; border-top: 1px solid var(--line); }
+.notif-empty .serif { font-size: clamp(28px, 4vw, 44px); margin: 0 0 12px; }
+@media (max-width: 720px) {
+  .notif { grid-template-columns: auto 1fr; }
+  .notif-actions { grid-column: 2; flex-wrap: wrap; gap: 12px 18px; }
+}
