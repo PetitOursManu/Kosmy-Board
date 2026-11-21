@@ -152,6 +152,7 @@ function blockHtml(b, i) {
       }).join("");
       return `<div class="a-block a-table-wrap">
         <div class="a-table-head">${title}${filter}${tools}</div>
+        ${b.description ? `<p class="note a-table-desc">${esc(b.description)}</p>` : ""}
         ${b.rows.length ? `<table class="a-table">
           <thead><tr>${b.columns.map((c) => `<th class="mono" scope="col">${esc(c.label)}</th>`).join("")}${b.rowActions?.length ? '<th class="row-acts"><span class="sr-only">Actions</span></th>' : ""}</tr></thead>
           <tbody>${rows}</tbody>
@@ -301,7 +302,7 @@ function showSection(main, space, sectionId, data) {
     try {
       const r = await api.post(`${base(space.id)}/${encodeURIComponent(sectionId)}${q()}`, payload);
       reveal = r.reveal ? { key, ...r.reveal } : null;
-      toast(r.message || t("adminDone"));
+      toast(r.message || t("adminDone"), r.tone === "danger" || r.tone === "warning" ? "error" : "info");
       let next = r.section;
       if (!next) next = await api.get(`${base(space.id)}/${encodeURIComponent(sectionId)}${q()}`);
       showSection(main, space, sectionId, next);

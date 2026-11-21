@@ -30,7 +30,8 @@ Tous sous l'adresse de l'instance saisie dans le Board (sans « / » final), par
 `{section}` : `[a-z0-9-]{1,40}`. Réponses en `application/json; charset=utf-8`, avec `Cache-Control: no-store`.
 Pas de CORS : seul le serveur du Board appelle ces adresses. Pas de redirection (le Board ne les suit pas).
 
-La langue de la personne arrive dans `Accept-Language` (`fr` ou `en`) : tous les textes renvoyés sont dans cette langue.
+La langue de la personne arrive dans `Accept-Language`, qui vaut exactement `fr` ou `en` : tous les textes renvoyés sont dans
+cette langue (les messages d'une appli qui n'a qu'une langue peuvent rester dans la sienne).
 
 ## Authentification : le jeton du Board
 
@@ -87,6 +88,7 @@ Toujours en JSON : `{ "error": "<code>", "message": "<texte lisible, facultatif>
 | `403` | `forbidden` | Le compte relié n'a pas les droits d'administration. |
 | `404` | `not_found` | Section, ligne ou action inconnue. |
 | `400`, `409`, `422` | au choix | Saisie refusée, conflit… avec un `message` à montrer. |
+| `503` | au choix | L'appli n'arrive pas à joindre le Board (découverte, clés) pour vérifier le jeton. |
 
 ## Le sommaire : `GET /api/kosmy-board/admin`
 
@@ -165,7 +167,7 @@ Envoie `{ "action": "save-general", "values": { … } }` (voir plus bas).
 ### `table` : une liste, avec des actions par ligne
 
 ```json
-{ "type": "table", "id": "users", "title": "Comptes",
+{ "type": "table", "id": "users", "title": "Comptes", "description": "Facultatif.",
   "columns": [ { "key": "name", "label": "Nom" }, { "key": "role", "label": "Rôle" }, { "key": "last", "label": "Dernière connexion" } ],
   "rows": [
     { "id": "u_42", "cells": { "name": "Alice", "role": { "text": "Admin", "tone": "success" }, "last": "il y a 2 jours" },
@@ -233,13 +235,40 @@ Un champ `password` n'a jamais de `value` : vide à l'envoi, il veut dire « ne 
 **L'appli revérifie tout** : droits, existence de la ligne, valeurs (le Board ne fait que transmettre). Réponse :
 
 ```json
-{ "ok": true, "message": "Compte supprimé.", "section": { … }, "reveal": { "label": "Lien d'invitation", "value": "https://…" } }
+{ "ok": true, "message": "Compte supprimé.", "tone": "success", "section": { … }, "reveal": { "label": "Lien d'invitation", "value": "https://…" } }
 ```
 
 - `message` (facultatif) : affiché brièvement.
+- `tone` (facultatif) : `success`, `info`, `warning` ou `danger`. Avec `warning` ou `danger`, le message s'affiche comme une erreur :
+  pratique pour un résultat qui n'est pas une erreur de saisie (« Tester la connexion » qui échoue, par exemple).
 - `section` (facultatif, conseillé) : la section à jour, affichée aussitôt. Sans elle, le Board la redemande.
 - `reveal` (facultatif) : une valeur à montrer une seule fois avec un bouton « Copier » (mot de passe temporaire,
   lien d'invitation…). Le Board ne la garde pas.
+
+## Limites
+
+Le Board coupe ou écarte ce qui dépasse (sans erreur) : mieux vaut rester en dessous.
+
+| Élément | Limite |
+| --- | --- |
+| Sections | 20 ; `id` `[a-z0-9-]{1,40}`, titre 60 caractères |
+| Blocs par section | 30 ; un type inconnu est ignoré |
+| `stats` / `fields` | 12 / 40 éléments ; libellé 120, valeur 2 000 caractères |
+| Tableaux | 12 colonnes, 500 lignes ; `id` de ligne 200 caractères, cellule 500 caractères |
+| Actions | 20 par liste ; `id` `[A-Za-z0-9_.:-]{1,64}`, libellé 80, `confirm` 500 caractères |
+| Champs | 60 par formulaire ; `options` 200 ; valeur 2 000 caractères (20 000 pour `textarea`) |
+| Textes | titres 120, `description` 1 000, `notice` 2 000, `message` 300, `reveal` 4 000 caractères |
+| Réponse | 2 Mo ; 15 secondes pour un `GET`, 30 secondes pour un `POST` |
+
+## Conseils
+
+- **Ne pas se couper l'accès** : refuser, depuis le Board, les actions d'une personne sur son propre compte (se retirer
+  les droits, se supprimer, se délier), et le retrait du dernier administrateur. Avertir (`confirm`) avant un changement
+  qui couperait l'admin dans le Board elle-même (émetteur ou identifiant client de la connexion unique).
+- **Appli sans rôles** (une clé d'admin unique plutôt que des comptes administrateurs) : décider quels comptes reliés
+  ont les droits (par exemple ceux reliés par le détenteur de la clé), et redemander la clé dans un champ `password`
+  pour les actions les plus sensibles.
+- **Plusieurs serveurs** derrière l'appli : partager les `jti` déjà vus (base, Redis…), sinon un jeton pourrait servir deux fois.
 
 ## Sécurité, en résumé
 
@@ -249,4 +278,4 @@ Un champ `password` n'a jamais de `value` : vide à l'envoi, il veut dire « ne 
 - Ne jamais renvoyer de secret existant (mot de passe, clé d'API, secret client) dans une section : seulement un `reveal`
   au moment où il est créé.
 - Le Board affiche tout en texte brut : pas de HTML dans les textes.
-- Le Board ne suit pas les redirections et limite les réponses à 2 Mo et 15 secondes.
+- Le Board ne suit pas les redirections et limite les réponses (voir « Limites »).

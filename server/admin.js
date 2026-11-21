@@ -17,7 +17,8 @@ export const PROTOCOL = "kosmy.board-admin.v1";
 export const ADMIN_PATH = "/api/kosmy-board/admin";
 export const TOKEN_TYPE = "kb-admin+jwt";
 const TOKEN_TTL = 60;
-const TIMEOUT = 15_000;
+/* Lecture : 15 secondes. Action : 30 secondes (un test de connexion de l'appli peut être long). */
+const TIMEOUT = { GET: 15_000, POST: 30_000 };
 const MAX_BYTES = 2_000_000;
 
 export const SECTION_ID = /^[a-z0-9-]{1,40}$/;
@@ -79,7 +80,7 @@ export async function callApp({ base, clientId, user, lang, method = "GET", sect
     res = await fetch(url, {
       method,
       redirect: "manual",
-      signal: AbortSignal.timeout(TIMEOUT),
+      signal: AbortSignal.timeout(TIMEOUT[method] ?? TIMEOUT.GET),
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
@@ -256,7 +257,7 @@ function block(b, base) {
         })
         .filter(Boolean);
       return strip({
-        type: "table", id: id(b.id) || undefined, title, columns, rows,
+        type: "table", id: id(b.id) || undefined, title, description: text(b.description, 1000) || undefined, columns, rows,
         rowActions: rowActions.length ? rowActions : undefined,
         actions: Array.isArray(b.actions) && b.actions.length ? actions(b.actions) : undefined,
         empty: text(b.empty, 200) || undefined,
@@ -300,6 +301,7 @@ export function cleanResult(data, base, sectionId) {
   return strip({
     ok: true,
     message: text(data.message, 300) || undefined,
+    tone: tone(data.tone) || undefined,
     section: data.section && typeof data.section === "object" ? cleanSection(data.section, base, sectionId) : undefined,
     reveal: reveal?.label && reveal?.value ? reveal : undefined,
   });
