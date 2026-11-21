@@ -20,7 +20,7 @@ const hasAdminPage = (s) => s.path !== "/" && s.path !== "";
  * Avec la connexion unique et une adresse de lancement, l'appli démarre elle-même la connexion avec le Board
  * (OpenID Connect, connexion initiée par un tiers), puis arrive sur la page demandée.
  */
-function openUrl(s, admin = false) {
+export function openUrl(s, admin = false) {
   const target = admin ? spaceUrl(s) : homeUrl(s);
   if (!s.sso?.loginUri || !state.config.issuer) return target;
   const u = new URL(s.sso.loginUri);
@@ -32,7 +32,7 @@ function openUrl(s, admin = false) {
  * Nom propre à chaque espace : l'onglet de l'instance est réutilisé à chaque ouverture.
  * L'admin a son propre onglet, sinon « Ouvrir » ramènerait l'onglet resté sur l'admin (et inversement).
  */
-const windowName = (s, admin = false) => `kosmy-board-${s.id}${admin ? "-admin" : ""}`;
+export const windowName = (s, admin = false) => `kosmy-board-${s.id}${admin ? "-admin" : ""}`;
 
 function stateHtml(url) {
   const st = getStatus(url) ?? "checking";
@@ -63,7 +63,9 @@ function rowHtml(s, i, animate) {
       <span class="meta-r mono"><span class="opened">${esc(opened)}</span><span>${esc(themeName ?? "")}</span></span>
       <span class="actions mono">
         <a class="open-btn" href="${esc(open)}" target="${target}" rel="noopener noreferrer" aria-label="${esc(t("openLabel", s.name, host))}">${esc(t("open"))} <span class="arrow" aria-hidden="true">↗</span></a>
-        ${hasAdminPage(s) ? `<a class="open-btn alt" href="${esc(openUrl(s, true))}" target="${windowName(s, true)}" rel="noopener noreferrer" data-admin aria-label="${esc(t("adminLabel", s.name, host))}">${esc(t("admin"))}</a>` : ""}
+        ${s.sso
+          ? `<a class="open-btn alt" href="#/admin/${encodeURIComponent(s.id)}" aria-label="${esc(t("adminBoardLabel", s.name, host))}">${esc(t("admin"))}</a>`
+          : hasAdminPage(s) ? `<a class="open-btn alt" href="${esc(openUrl(s, true))}" target="${windowName(s, true)}" rel="noopener noreferrer" data-admin aria-label="${esc(t("adminLabel", s.name, host))}">${esc(t("admin"))}</a>` : ""}
         <a class="text-btn" href="#/modifier/${encodeURIComponent(s.id)}" aria-label="${esc(`${t("edit")} ${s.name}`)}">${esc(t("edit"))}</a>
         <button class="text-btn danger" type="button" data-remove aria-label="${esc(`${t("remove")} ${s.name}`)}">${esc(t("remove"))}</button>
       </span>
@@ -128,7 +130,7 @@ onStatus((url) => {
  * avec le Board juste après l'ouverture (opener = null), ce qui revient au même pour la sécurité.
  * Une instance qui envoie Cross-Origin-Opener-Policy (Dashy, via helmet) s'ouvre dans un nouvel onglet à chaque fois.
  */
-function openInTab(url, name) {
+export function openInTab(url, name) {
   const w = window.open("", name);
   if (!w) {
     // Fenêtres surgissantes bloquées : on ouvre l'adresse simplement, dans un nouvel onglet.

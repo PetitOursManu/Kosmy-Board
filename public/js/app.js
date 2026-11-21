@@ -10,6 +10,7 @@ import { renderList } from "./views/list.js";
 import { renderEdit } from "./views/edit.js";
 import { renderAccount } from "./views/account.js";
 import { renderSso } from "./views/sso.js";
+import { renderAdmin } from "./views/admin.js";
 
 /** État partagé par les vues. */
 export const state = {
@@ -122,6 +123,8 @@ export async function route() {
       return renderAccount(main);
     case "connexion-unique":
       return renderSso(main, { id: parts[1] });
+    case "admin":
+      return renderAdmin(main, { id: parts[1], section: parts[2] });
     default:
       return renderList(main, { rerender: sameRoute });
   }

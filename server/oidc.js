@@ -34,6 +34,9 @@ function signingKeys() {
   return keys;
 }
 
+/** La clé privée de signature (JWK), aussi utilisée pour les jetons de l'admin dans le Board (server/admin.js). */
+export const signingJwk = () => signingKeys()[0];
+
 function cookieKeys() {
   const saved = meta.get("oidc_cookie_keys");
   if (saved) return JSON.parse(saved);
