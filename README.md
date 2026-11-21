@@ -61,7 +61,8 @@ les sections que l'appli propose (vue d'ensemble, comptes, réglages, maintenanc
   **Ouvrir l'admin de l'appli ↗** ouvre son admin dans un onglet, comme avant.
 - Une appli qui ne propose pas encore l'admin dans le Board : le Board le dit, et propose de l'ouvrir dans un onglet.
 
-Applis Kosmy compatibles : Calendy, ClearDoc, Crafty, Dashy, Kanby, Lumy, Mocky (avec la connexion unique réglée).
+Applis Kosmy compatibles : Calendy, ClearDoc, Crafty, Dashy, Kanby, Lumy, Mocky et Soundy (version web), avec la connexion unique réglée.
+Dans Soundy, chaque personne relie d’abord son compte Emby dans les Réglages (« Relier à Kosmy Board »).
 Pour une autre appli : le [guide de l'admin dans le Board](docs/admin-api.md) décrit le protocole, et l'[appli de démonstration](examples/demo-app/server.js) l'implémente.
 
 ## Kosmy Mobile
