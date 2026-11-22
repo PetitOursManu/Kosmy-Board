@@ -579,3 +579,84 @@ textarea.input { resize: vertical; min-height: 48px; font-size: 15px; font-famil
   .notif { grid-template-columns: auto 1fr; }
   .notif-actions { grid-column: 2; flex-wrap: wrap; gap: 12px 18px; }
 }
+
+/* ---------- Assistant ---------- */
+.ai-link[aria-current="page"] { color: var(--signal); }
+.ai-model { font-size: 11px; color: var(--mute); }
+.ai-model:empty { display: none; }
+.ai-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 9fr); gap: 48px; border-top: 1px solid var(--line); padding-top: 32px; }
+.ai-layout[hidden] { display: none; }
+.ai-side-title { font-size: 11px; color: var(--mute); margin-bottom: 12px; }
+.ai-convs { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 70vh; overflow-y: auto; }
+.ai-conv { display: grid; gap: 2px; padding: 10px 12px; border-radius: 14px; color: var(--text-2); text-decoration: none; transition: background .2s, color .2s; }
+.ai-conv:hover { background: var(--panel); color: var(--paper); }
+.ai-conv.current { background: var(--panel); color: var(--paper); box-shadow: inset 2px 0 0 var(--signal); }
+.ai-conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.ai-conv-time { font-size: 10px; color: var(--mute); }
+.ai-conv .pill { font-size: 9px; padding: 1px 6px; }
+.ai-chat { min-width: 0; display: grid; gap: 16px; align-content: start; }
+.ai-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.ai-chat-title { font-size: clamp(28px, 3vw, 40px); line-height: 1.05; overflow-wrap: anywhere; }
+.ai-log { display: grid; gap: 18px; }
+.ai-log:empty { display: none; }
+.ai-msg.user { justify-self: end; max-width: min(80%, 62ch); }
+.ai-bubble { padding: 12px 18px; border-radius: 20px 20px 6px 20px; background: var(--paper); color: var(--bg); overflow-wrap: anywhere; }
+.ai-bubble p { margin: 0; }
+.ai-msg.assistant { max-width: 72ch; display: grid; gap: 10px; }
+.ai-text { color: var(--paper); line-height: 1.65; overflow-wrap: anywhere; }
+.ai-text p { margin: 0 0 10px; }
+.ai-text p:last-child, .ai-text ul:last-child, .ai-text ol:last-child { margin-bottom: 0; }
+.ai-text ul, .ai-text ol { margin: 0 0 10px; padding-left: 22px; }
+.ai-text li + li { margin-top: 4px; }
+.ai-text code, .ai-bubble code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .88em; padding: 1px 5px; border-radius: 6px; background: rgba(241, 237, 228, .08); }
+.ai-bubble code { background: rgba(13, 12, 10, .1); }
+.ai-tools { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-tools:empty { display: none; }
+.ai-tool { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; font: 11px "JetBrains Mono", ui-monospace, monospace; color: var(--mute); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-tool[data-ok="true"] .ai-tool-mark { color: var(--signal); }
+.ai-tool[data-ok="false"] { border-color: rgba(255, 138, 122, .4); }
+.ai-tool[data-ok="false"] .ai-tool-mark { color: var(--danger); }
+.ai-typing { display: inline-flex; gap: 5px; margin: 4px 0; }
+.ai-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--mute); animation: aiDot 1.2s infinite ease-in-out; }
+.ai-typing span:nth-child(2) { animation-delay: .15s; }
+.ai-typing span:nth-child(3) { animation-delay: .3s; }
+@keyframes aiDot { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+.ai-note { font-size: 10px; color: var(--mute); text-align: center; }
+.ai-note[data-kind="confirmed"] { color: var(--signal); }
+.ai-note[data-kind="refused"], .ai-note[data-kind="failed"] { color: var(--danger); }
+.ai-error { margin: 0; }
+.ai-pendings, .ai-reveals { display: grid; gap: 12px; }
+.ai-pendings:empty, .ai-reveals:empty { display: none; }
+.ai-card { padding: 20px 22px; border-radius: 22px; border: 1px solid var(--line-strong); border-left: 3px solid #f5c451; background: var(--panel); }
+.ai-card.danger { border-left-color: var(--danger); }
+.ai-card-kicker { font-size: 10px; color: var(--mute); margin: 0 0 6px; }
+.ai-card-title { margin: 0; font-size: 19px; font-weight: 500; }
+.ai-card-row { color: var(--text-2); font-weight: 400; }
+.ai-card-text { margin: 6px 0 0; color: var(--text-2); white-space: pre-line; }
+.ai-card .inline-actions { margin-top: 16px; }
+.ai-values { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 12px 0 0; }
+.ai-values dt { font-size: 10px; color: var(--mute); padding-top: 3px; }
+.ai-values dd { margin: 0; overflow-wrap: anywhere; }
+.ai-reveal { margin-top: 0; }
+.ai-suggest .chip { text-align: left; }
+.ai-compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: end; padding-top: 8px; position: sticky; bottom: 0; background: linear-gradient(transparent, var(--bg) 22%); }
+.ai-compose .btn[hidden] { display: none; }
+textarea.ai-input { font-family: inherit; resize: vertical; min-height: 52px; max-height: 40vh; font-size: 17px; line-height: 1.5; }
+.ai-usage { font-size: 10px; color: var(--mute); }
+.ai-audit { list-style: none; margin: 0; padding: 0; border-bottom: 1px solid var(--line); }
+.ai-audit li { display: grid; grid-template-columns: 170px minmax(0, 1fr) auto; gap: 4px 16px; padding: 12px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.ai-audit li[data-ok="false"] .ai-audit-what strong { color: var(--danger); }
+.ai-audit-time, .ai-audit-meta { font-size: 10px; color: var(--mute); }
+.ai-audit-what { overflow-wrap: anywhere; color: var(--text-2); }
+.ai-audit-what strong { font-weight: 500; color: var(--paper); }
+@media (max-width: 960px) {
+  .ai-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .ai-convs { max-height: 180px; }
+  .ai-audit li { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .ai-msg.user { max-width: 92%; }
+  .ai-compose { grid-template-columns: minmax(0, 1fr); }
+}
+/* Ce qui arrive dans le chat défile au-dessus du champ de saisie (collé en bas de l'écran). */
+.ai-msg, .ai-note, .ai-error, .ai-card, .ai-reveal { scroll-margin-bottom: 150px; }
