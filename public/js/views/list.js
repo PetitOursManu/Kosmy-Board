@@ -5,6 +5,7 @@ import { errorText, lang, relTime, t } from "../i18n.js";
 import { hostOf, isCleartext, isLocalHost, spaceUrl } from "../normalize.js";
 import { check, getStatus, onStatus, checkable } from "../status.js";
 import { $, $$, colorsOf, confirmBox, esc, logoTile, reducedMotion, toast } from "../ui.js";
+import { mountChat } from "./chat.js";
 
 let query = "";
 let theme = "all";
@@ -178,13 +179,75 @@ async function removeSpace(main, s) {
   }
 }
 
+/* ---------- L'Assistant, en haut de l'accueil ---------- */
+
+/**
+ * Le cadre de l'Assistant est créé une fois, puis remis en place à chaque affichage de la liste :
+ * une réponse en cours continue quand la liste se redessine (retour sur l'onglet, espace supprimé…).
+ */
+let home = null; // { userId, lang, el, chat }
+
+function homeAssistant() {
+  if (home && home.userId === state.user.id && (home.lang === lang || home.chat.busy || home.chat.conversationId)) return home.el;
+  home?.chat.abort();
+  const el = document.createElement("div");
+  el.className = "home-ai fade";
+  el.style.setProperty("--d", ".15s");
+  el.setAttribute("role", "region");
+  el.setAttribute("aria-label", t("aiNav"));
+  el.innerHTML = `
+    <div class="home-ai-head">
+      <p class="mono home-ai-kicker"><span class="home-ai-mark" aria-hidden="true">✦</span> ${esc(t("aiNav"))}</p>
+      <div class="home-ai-links">
+        <button class="text-btn mono" type="button" data-reset hidden>${esc(t("aiNew"))} +</button>
+        <a class="text-btn mono" href="#/assistant" data-open>${esc(t("aiHomeOpen"))} →</a>
+      </div>
+    </div>
+    <div class="ai-chat-box compact"></div>`;
+  el.addEventListener("animationend", () => el.classList.remove("fade"), { once: true });
+  const open = $("[data-open]", el);
+  const reset = $("[data-reset]", el);
+  const mount = () => {
+    home.chat = mountChat($(".ai-chat-box", el), {
+      compact: true,
+      onConversation: (d) => {
+        open.href = `#/assistant/${d.id}`;
+        open.textContent = `${t("aiHomeContinue")} →`;
+        reset.hidden = false;
+      },
+    });
+    open.href = "#/assistant";
+    open.textContent = `${t("aiHomeOpen")} →`;
+    reset.hidden = true;
+  };
+  home = { userId: state.user.id, lang, el, chat: null };
+  mount();
+  reset.addEventListener("click", () => {
+    home.chat.abort();
+    mount();
+    $(".ai-input", el).focus();
+  });
+  return el;
+}
+
+/** Assistant pas encore réglé : un mot pour les administrateurs, rien pour les autres. */
+const homeAssistantSetup = () => (state.user.role === "admin"
+  ? `<div class="home-ai home-ai-setup fade" style="--d:.15s">
+      <p class="mono home-ai-kicker"><span class="home-ai-mark" aria-hidden="true">✦</span> ${esc(t("aiNav"))}</p>
+      <p>${esc(t("aiNotConfiguredAdmin"))}</p>
+      <a class="text-btn mono" href="#/assistant/reglages">${esc(t("aiSettings"))} →</a>
+    </div>`
+  : "");
+
 export function renderList(main, { rerender = false } = {}) {
   const spaces = state.spaces ?? [];
   const animate = !rerender && !reducedMotion();
   const anyHttpUnchecked = spaces.some((s) => !checkable(spaceUrl(s)));
+  const ai = state.assistant?.configured;
 
   main.innerHTML = `
     <section class="page">
+      ${ai ? '<div id="home-ai-slot"></div>' : homeAssistantSetup()}
       <div class="page-head">
         <div>
           <p class="mono kicker fade">${esc(t("listKicker"))}</p>
@@ -215,6 +278,7 @@ export function renderList(main, { rerender = false } = {}) {
         </div>` : emptyHtml()}
     </section>`;
 
+  if (ai) $("#home-ai-slot", main).replaceWith(homeAssistant());
   if (!spaces.length) return;
   applyFilter(main);
   checkAll();
