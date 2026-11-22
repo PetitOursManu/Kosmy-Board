@@ -4,11 +4,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-export async function startServer() {
+export async function startServer(env = {}) {
   const port = 18000 + Math.floor(Math.random() * 2000);
   const base = `http://localhost:${port}`;
   const dir = mkdtempSync(path.join(tmpdir(), "kosmy-board-test-"));
-  const proc = spawn(process.execPath, ["server/index.js"], { env: { ...process.env, PORT: String(port), DATA_DIR: dir, PUBLIC_URL: base } });
+  const proc = spawn(process.execPath, ["server/index.js"], { env: { ...process.env, PORT: String(port), DATA_DIR: dir, PUBLIC_URL: base, ...env } });
   let out = "";
   const setupCode = await new Promise((resolve, reject) => {
     proc.stdout.on("data", (d) => {

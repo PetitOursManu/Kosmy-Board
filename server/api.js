@@ -17,6 +17,14 @@ import {
   updateSpace, updateSso,
 } from "./spaces.js";
 import { newRecoveryCodes, newTotpSecret, normalizeRecovery, otpauthUri, verifyTotp } from "./totp.js";
+import {
+  addUserMessage, auditEntries, checkRate, conversationOut, createConversation, decidePending, deleteConversation, getConversation,
+  listConversations, pendingConversation, respond,
+} from "./ai/agent.js";
+import { aiTarget, cleanBaseUrl, preset as providerPreset, publicAiConfig, saveAiConfig } from "./ai/config.js";
+import { AiError, listModels, testTarget } from "./ai/providers.js";
+import { takeReveal } from "./ai/reveals.js";
+import { reportSettings, saveReportSettings } from "./ai/tools.js";
 
 const LANGS = new Set(["fr", "en"]);
 
@@ -527,6 +535,158 @@ route("DELETE", /^\/api\/notifications\/(\d{1,15})$/, (req, res, user, [id]) => 
   deleteNotifications(user.id, Number(id));
   send(res, 200, { ok: true });
 });
+
+/* ---------- Assistant (docs/assistant.md) ---------- */
+
+/**
+ * Réponse en flux (Server-Sent Events) : chaque événement de l'agent part aussitôt vers l'interface.
+ * Un commentaire toutes les 20 secondes garde la connexion ouverte derrière un proxy (Cloudflare coupe après ~100 s de silence).
+ * Si la personne ferme la page, l'appel au fournisseur est interrompu.
+ */
+async function streamAgent(req, res, run) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Accel-Buffering": "no",
+    Connection: "keep-alive",
+  });
+  const emit = (event, data) => {
+    if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  const beat = setInterval(() => !res.writableEnded && res.write(": ping\n\n"), 20_000);
+  const ctrl = new AbortController();
+  res.on("close", () => {
+    if (!res.writableFinished) ctrl.abort();
+  });
+  try {
+    await run(emit, ctrl.signal);
+    emit("done", {});
+  } catch (e) {
+    if (e instanceof HttpError) emit("error", { error: e.code, ...(e.extra || {}) });
+    else {
+      console.error("Assistant :", e);
+      emit("error", { error: "server" });
+    }
+  } finally {
+    clearInterval(beat);
+    res.end();
+  }
+}
+
+const assistantLang = (body, user) => cleanLang(body.lang) ?? user.lang ?? "fr";
+
+route("GET", /^\/api\/assistant$/, (req, res, user) => {
+  const ai = publicAiConfig();
+  send(res, 200, {
+    configured: ai.configured,
+    canConfigure: user.role === "admin",
+    provider: ai.providers.find((p) => p.id === ai.provider)?.label ?? ai.provider,
+    model: ai.model,
+    conversations: listConversations(user.id),
+    report: reportSettings(user.id),
+  });
+});
+
+route("GET", /^\/api\/assistant\/conversations\/([\w-]{6,40})$/, (req, res, user, [id]) => {
+  send(res, 200, conversationOut(user.id, id));
+});
+
+route("DELETE", /^\/api\/assistant\/conversations\/([\w-]{6,40})$/, (req, res, user, [id]) => {
+  deleteConversation(user.id, id);
+  send(res, 200, { ok: true });
+});
+
+/* Un message : { text, conversation? (sinon une nouvelle), lang }. Réponse en flux. */
+route("POST", /^\/api\/assistant\/messages$/, async (req, res, user) => {
+  const body = await readJson(req, 50_000);
+  const text = str(body.text, 8000);
+  if (!text) throw bad("ai_empty");
+  if (!publicAiConfig().configured) throw new HttpError(409, "ai_not_configured");
+  let conv = body.conversation ? getConversation(user.id, String(body.conversation)) : null;
+  if (body.conversation && !conv) throw new HttpError(404, "not_found");
+  checkRate(user.id);
+  const conversationId = conv?.id ?? createConversation(user.id, text);
+  addUserMessage(conversationId, text);
+  const lang = assistantLang(body, user);
+  await streamAgent(req, res, async (emit, signal) => {
+    emit("conversation", { id: conversationId, title: (conv ?? getConversation(user.id, conversationId)).title });
+    await respond({ user, lang, conversationId, emit, signal });
+  });
+});
+
+/* Valider ou refuser une action en attente : { approve, lang }. Validée, l'Assistant reprend la conversation. */
+route("POST", /^\/api\/assistant\/pending\/([\w-]{6,40})$/, async (req, res, user, [id]) => {
+  const body = await readJson(req);
+  const lang = assistantLang(body, user);
+  const approve = body.approve === true;
+  await streamAgent(req, res, async (emit, signal) => {
+    const out = await decidePending({ user, lang, id, approve, emit });
+    emit("decision", out);
+    const conversationId = pendingConversation(id);
+    if (approve && conversationId && publicAiConfig().configured) {
+      checkRate(user.id);
+      await respond({ user, lang, conversationId, emit, signal });
+    }
+  });
+});
+
+/* Valeur à montrer une fois, produite par un outil appelé depuis le MCP. */
+route("POST", /^\/api\/assistant\/reveal\/([\w-]{20,40})$/, (req, res, user, [id]) => {
+  const r = takeReveal(user.id, id);
+  if (!r) throw new HttpError(410, "ai_reveal_gone");
+  send(res, 200, r);
+});
+
+route("PUT", /^\/api\/assistant\/report$/, async (req, res, user) => {
+  send(res, 200, saveReportSettings(user.id, await readJson(req)));
+});
+
+route("GET", /^\/api\/assistant\/audit$/, (req, res, user) => {
+  const all = user.role === "admin" && new URL(req.url, "http://board").searchParams.get("all") === "1";
+  send(res, 200, { entries: auditEntries(all ? null : user.id) });
+});
+
+/* Réglage du fournisseur d'IA : administrateurs du Board. */
+route("GET", /^\/api\/assistant\/settings$/, (req, res) => {
+  send(res, 200, publicAiConfig());
+}, { admin: true });
+
+route("PUT", /^\/api\/assistant\/settings$/, async (req, res) => {
+  send(res, 200, saveAiConfig(await readJson(req)));
+}, { admin: true });
+
+/** Le réglage en vigueur, modifié par ce que l'interface n'a pas encore enregistré (essai avant d'enregistrer). */
+function draftTarget(body) {
+  const cur = aiTarget();
+  const sameProvider = !body.provider || body.provider === cur.provider;
+  const p = body.provider ? providerPreset(body.provider) : null;
+  return {
+    ...cur,
+    baseUrl: body.baseUrl ? cleanBaseUrl(body.baseUrl) : sameProvider ? cur.baseUrl : p.baseUrl,
+    model: str(body.model, 200) || (sameProvider ? cur.model : p.model),
+    apiKey: str(body.apiKey, 500) || (sameProvider ? cur.apiKey : ""),
+  };
+}
+
+async function aiCall(fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof AiError) throw new HttpError(502, e.code, e.message && e.message !== e.code ? { message: e.message } : undefined);
+    throw e;
+  }
+}
+
+route("POST", /^\/api\/assistant\/models$/, async (req, res) => {
+  const target = draftTarget(await readJson(req));
+  send(res, 200, { models: await aiCall(() => listModels(target)) });
+}, { admin: true });
+
+route("POST", /^\/api\/assistant\/test$/, async (req, res) => {
+  const target = draftTarget(await readJson(req));
+  if (!target.model) throw bad("ai_model");
+  send(res, 200, await aiCall(() => testTarget(target)));
+}, { admin: true });
 
 /* ---------- Aiguillage ---------- */
 
