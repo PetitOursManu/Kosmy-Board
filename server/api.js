@@ -10,7 +10,8 @@ import { db, tx } from "./db.js";
 import { bad, clientIp, HttpError, readJson, sameOrigin, send } from "./http.js";
 import { cleanActionInput, cleanManifest, cleanResult, cleanSection } from "./admin.js";
 import { clientFromBasic, deleteNotifications, listNotifications, markRead, notifyFromClient } from "./notifications.js";
-import { ISSUER } from "./oidc.js";
+import { createMcpToken, deleteMcpToken, listMcpTokens } from "./mcp.js";
+import { ISSUER, listMcpGrants, revokeMcpGrant } from "./oidc.js";
 import {
   appCall, cleanSpace, createInvite, createSpace, deleteInvite, deleteSpace, disableSso, enableSso, getSso,
   listMembers, listSpaceRows, MAX_SPACES, newSpaceId, removeMember, rotateSsoSecret, sectionId, spaceForAdmin, spaceOut,
@@ -654,6 +655,28 @@ route("POST", /^\/api\/assistant\/report\/run$/, (req, res, user) => {
 route("GET", /^\/api\/assistant\/audit$/, (req, res, user) => {
   const all = user.role === "admin" && new URL(req.url, "http://board").searchParams.get("all") === "1";
   send(res, 200, { entries: auditEntries(all ? null : user.id) });
+});
+
+/* ---------- Accès MCP : jetons personnels et autorisations OAuth (Compte → Accès MCP) ---------- */
+
+route("GET", /^\/api\/mcp$/, (req, res, user) => {
+  send(res, 200, { url: `${config.publicUrl}/mcp`, tokens: listMcpTokens(user.id), grants: listMcpGrants(user.id) });
+});
+
+/* Le jeton n'est montré qu'une fois. */
+route("POST", /^\/api\/mcp\/tokens$/, async (req, res, user) => {
+  const body = await readJson(req);
+  send(res, 201, createMcpToken(user.id, body.name));
+});
+
+route("DELETE", /^\/api\/mcp\/tokens\/([\w-]{6,40})$/, (req, res, user, [id]) => {
+  deleteMcpToken(user.id, id);
+  send(res, 200, { ok: true });
+});
+
+route("DELETE", /^\/api\/mcp\/grants\/([\w-]{6,80})$/, (req, res, user, [id]) => {
+  if (!revokeMcpGrant(user.id, id)) throw new HttpError(404, "not_found");
+  send(res, 200, { ok: true });
 });
 
 /* Réglage du fournisseur d'IA : administrateurs du Board. */

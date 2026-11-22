@@ -45,6 +45,43 @@ function devicesHtml(devices) {
   </div>`;
 }
 
+/* ---------- Accès MCP (Claude Code, Claude Desktop, claude.ai…) ---------- */
+
+function mcpHtml(data, created = null) {
+  const cmd = (tok) => `claude mcp add --transport http kosmy-board ${data.url} --header "Authorization: Bearer ${tok}"`;
+  const rows = [
+    ...data.grants.map((g) => `
+      <div class="person">
+        <span class="avatar" aria-hidden="true">${esc((g.client.trim()[0] || "?").toUpperCase())}</span>
+        <span class="who"><strong>${esc(g.client)}</strong><span class="mono">${esc(t("mcpGrant", relTime(g.createdAt)))}</span></span>
+        <button class="text-btn mono danger" type="button" data-mcp-grant="${esc(g.id)}" data-name="${esc(g.client)}">${esc(t("deviceRevoke"))}</button>
+      </div>`),
+    ...data.tokens.map((k) => `
+      <div class="person">
+        <span class="avatar" aria-hidden="true">#</span>
+        <span class="who"><strong>${esc(k.name)}</strong><span class="mono">${esc(k.lastUsedAt ? t("deviceSeen", relTime(k.lastUsedAt)) : t("mcpTokenUnused"))}</span></span>
+        <button class="text-btn mono danger" type="button" data-mcp-token="${esc(k.id)}" data-name="${esc(k.name)}">${esc(t("deviceRevoke"))}</button>
+      </div>`),
+  ];
+  return `
+    <div class="setting"><span class="label mono">${esc(t("mcpUrl"))}</span><code>${esc(data.url)}</code>
+      <button class="text-btn mono" type="button" data-copy="${esc(data.url)}">${esc(t("copy2"))}</button>
+      <span class="hint">${esc(t("mcpUrlHint"))}</span></div>
+    ${created ? `<div class="invite-link a-reveal" role="status">
+        <span class="mono">${esc(t("mcpTokenOnce"))}</span>
+        <code>${esc(created.token)}</code>
+        <div class="inline-actions" style="margin-top:4px">
+          <button class="text-btn mono" type="button" data-copy="${esc(created.token)}">${esc(t("copy2"))}</button>
+          <button class="text-btn mono" type="button" data-copy="${esc(cmd(created.token))}">${esc(t("mcpCopyCommand"))}</button>
+        </div></div>` : ""}
+    ${rows.length ? `<div class="people" style="margin-top:20px">${rows.join("")}</div>` : `<p class="hint" style="margin-top:16px">${esc(t("mcpNone"))}</p>`}
+    <form class="invite-form" id="mcp-new" style="margin-top:20px">
+      <div class="field" style="margin-top:0"><label class="mono" for="mcp-name">${esc(t("mcpTokenName"))}</label>
+        <input class="input" id="mcp-name" maxlength="60" placeholder="Claude Code" autocomplete="off"></div>
+      <button class="btn ghost" type="submit">${esc(t("mcpCreateToken"))}</button>
+    </form>`;
+}
+
 /* ---------- Double authentification ---------- */
 
 function codesHtml(codes) {
@@ -170,10 +207,11 @@ async function renderTfa(box, mode, main, data = {}) {
 export async function renderAccount(main) {
   const u = state.user;
   const isAdmin = u.role === "admin";
-  const [people, tfa, devices] = await Promise.all([
+  const [people, tfa, devices, mcpData] = await Promise.all([
     isAdmin ? api.get("api/users").catch(() => null) : null,
     api.get("api/2fa").catch(() => ({ enabled: false, recoveryLeft: 0 })),
     api.get("api/devices").then((r) => r.devices).catch(() => []),
+    api.get("api/mcp").catch(() => null),
   ]);
   let n = 0;
   const num = () => String(++n).padStart(2, "0");
@@ -197,6 +235,7 @@ export async function renderAccount(main) {
           </form>`)}
         ${section(num(), esc(t("twoFactor")), `<div id="tfa"></div>`, tfa.enabled ? t("twoFactorOn", tfa.recoveryLeft) : t("twoFactorOff"))}
         ${section(num(), esc(t("devices")), `<div id="devices">${devicesHtml(devices)}</div>`, t("devicesText"))}
+        ${mcpData ? section(num(), esc(t("mcpTitle")), `<div id="mcp">${mcpHtml(mcpData)}</div>`, t("mcpText")) : ""}
         ${section(num(), esc(t("changePassword")), `
           <form id="password" novalidate>
             <input type="text" name="username" autocomplete="username" value="${esc(u.email)}" hidden>
@@ -347,6 +386,37 @@ export async function renderAccount(main) {
       toast(t("deviceRevoked"));
       const r = await api.get("api/devices");
       $("#devices", main).innerHTML = devicesHtml(r.devices);
+    } catch (ex) {
+      toast(errorText(ex.code, ex.extra), "error");
+    }
+  });
+
+  const mcpBox = $("#mcp", main);
+  const redrawMcp = async (created = null) => {
+    mcpBox.innerHTML = mcpHtml(await api.get("api/mcp"), created);
+  };
+  mcpBox?.addEventListener("submit", async (e) => {
+    if (e.target.id !== "mcp-new") return;
+    e.preventDefault();
+    const restore = busy(e.submitter, "…");
+    try {
+      const created = await api.post("api/mcp/tokens", { name: $("#mcp-name", main).value });
+      await redrawMcp(created);
+    } catch (ex) {
+      restore();
+      toast(errorText(ex.code, ex.extra), "error");
+    }
+  });
+  mcpBox?.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-mcp-token], [data-mcp-grant]");
+    if (!btn) return;
+    const ok = await confirmBox({ title: t("mcpRevokeTitle", btn.dataset.name), text: t("mcpRevokeText"), ok: t("deviceRevoke"), danger: true });
+    if (!ok) return;
+    try {
+      if (btn.dataset.mcpToken) await api.del(`api/mcp/tokens/${encodeURIComponent(btn.dataset.mcpToken)}`);
+      else await api.del(`api/mcp/grants/${encodeURIComponent(btn.dataset.mcpGrant)}`);
+      toast(t("deviceRevoked"));
+      await redrawMcp();
     } catch (ex) {
       toast(errorText(ex.code, ex.extra), "error");
     }
