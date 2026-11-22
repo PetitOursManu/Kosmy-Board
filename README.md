@@ -79,7 +79,7 @@ Elles arrivent dans la **cloche** de l'en-tête du Board et, avec Kosmy Mobile, 
 
 ## Assistant IA
 
-L'icône ✦ de l'en-tête ouvre l'**Assistant** : « quelles instances ont une alerte ? », « ferme les inscriptions partout »,
+L'**Assistant** est en haut de l'accueil (et sur sa page, par l'icône ✦ de l'en-tête) : « quelles instances ont une alerte ? », « ferme les inscriptions partout »,
 « invite lea@… sur Kanby ». Il se sert de l'admin dans le Board, donc de toute appli qui suit son protocole.
 
 - **Avec votre identité** : chaque appli revérifie vos droits, comme pour le bouton « Admin ».

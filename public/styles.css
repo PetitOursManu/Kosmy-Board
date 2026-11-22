@@ -660,3 +660,26 @@ textarea.ai-input { font-family: inherit; resize: vertical; min-height: 52px; ma
 }
 /* Ce qui arrive dans le chat défile au-dessus du champ de saisie (collé en bas de l'écran). */
 .ai-msg, .ai-note, .ai-error, .ai-card, .ai-reveal { scroll-margin-bottom: 150px; }
+
+/* Chat partagé (views/chat.js) : messages, cartes, suggestions, champ. */
+.ai-chat-box, .ai-scroll { display: grid; gap: 16px; align-content: start; min-width: 0; }
+.ai-scroll:not(:has(.ai-log > *, .ai-pendings > *, .ai-reveals > *)) { display: none; }
+
+/* ---------- L'Assistant en haut de l'accueil ---------- */
+.home-ai {
+  margin-bottom: clamp(36px, 6vh, 64px); padding: clamp(18px, 2.4vw, 28px); border: 1px solid var(--line-strong); border-radius: 28px;
+  background: var(--panel); display: grid; gap: 14px;
+}
+.home-ai-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 20px; }
+.home-ai-kicker { font-size: 12px; color: var(--paper); margin: 0; }
+.home-ai-mark { color: var(--signal); margin-right: 4px; }
+.home-ai-links { display: flex; flex-wrap: wrap; gap: 6px 20px; }
+.home-ai-links .text-btn { text-decoration: none; }
+.home-ai-links .text-btn[hidden] { display: none; }
+.home-ai-setup { gap: 8px; justify-items: start; }
+.home-ai-setup p:not(.mono) { margin: 0; color: var(--text-2); }
+.ai-chat-box.compact .ai-scroll { max-height: min(48vh, 440px); overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; }
+.ai-chat-box.compact .ai-msg.assistant { max-width: none; }
+.ai-compose.compact { position: static; background: none; padding-top: 0; }
+.ai-compose.compact textarea.ai-input { min-height: 46px; font-size: 16px; }
+.ai-chat-box.compact .ai-suggest .chip { font-size: 12px; }

@@ -62,6 +62,7 @@ route("GET", /^\/api\/state$/, (req, res) => {
     setupNeeded: needsSetup(),
     user: user ? userOut(user) : null,
     config: { kosmyUrl: config.kosmyUrl, catalogUrl: config.catalogUrl, publicUrl: config.publicUrl, issuer: ISSUER },
+    ...(user ? { assistant: { configured: publicAiConfig().configured } } : {}),
   });
 }, { auth: false });
 

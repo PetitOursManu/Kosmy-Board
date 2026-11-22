@@ -1,156 +1,22 @@
 /*
  * L'Assistant : un agent IA qui gère vos instances (docs/assistant.md).
- * La réponse arrive en flux (Server-Sent Events). Tout ce qui vient du modèle ou des applis est échappé (esc),
- * puis mis en forme avec un Markdown minimal (paragraphes, listes, gras, code).
+ * Cette page : la liste des conversations et le chat (views/chat.js), puis les réglages.
  */
 import { api } from "../api.js";
 import { go, state, titleHtml } from "../app.js";
 import { errorText, lang, relTime, t } from "../i18n.js";
-import { $, $$, busy, confirmBox, esc, toast } from "../ui.js";
+import { $, busy, confirmBox, esc, toast } from "../ui.js";
+import { mountChat, revealHtml } from "./chat.js";
 
 const base = "api/assistant";
 
-/* ---------- Markdown minimal (sur du texte déjà échappé) ---------- */
-
-function inline(s) {
-  return s
-    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-}
-export function md(text) {
-  const lines = esc(text).split("\n");
-  const out = [];
-  let list = null; // "ul" | "ol"
-  let para = [];
-  const flushPara = () => {
-    if (para.length) out.push(`<p>${inline(para.join("<br>"))}</p>`);
-    para = [];
-  };
-  const closeList = () => {
-    if (list) out.push(`</${list}>`);
-    list = null;
-  };
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    const ul = /^\s*[-*•] +(.*)$/.exec(line);
-    const ol = /^\s*\d+[.)] +(.*)$/.exec(line);
-    if (ul || ol) {
-      flushPara();
-      const kind = ul ? "ul" : "ol";
-      if (list !== kind) {
-        closeList();
-        out.push(`<${kind}>`);
-        list = kind;
-      }
-      out.push(`<li>${inline((ul ?? ol)[1])}</li>`);
-    } else if (!line.trim()) {
-      flushPara();
-      closeList();
-    } else {
-      closeList();
-      para.push(line.replace(/^#+\s*/, ""));
-    }
-  }
-  flushPara();
-  closeList();
-  return out.join("");
-}
-
-/* ---------- Flux SSE ---------- */
-
-/** POST qui répond en text/event-stream : onEvent(nom, données) pour chaque événement. */
-async function stream(url, body, onEvent, signal) {
-  let res;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify(body),
-      signal,
-    });
-  } catch (e) {
-    if (signal?.aborted) return;
-    onEvent("error", { error: "network" });
-    return;
-  }
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    onEvent("error", data.error ? data : { error: "generic" });
-    return;
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf("\n\n")) >= 0) {
-        const block = buf.slice(0, i);
-        buf = buf.slice(i + 2);
-        const ev = /^event: (.+)$/m.exec(block)?.[1];
-        const data = /^data: (.+)$/m.exec(block)?.[1];
-        if (ev && data) onEvent(ev, JSON.parse(data));
-      }
-    }
-  } catch {
-    if (!signal?.aborted) onEvent("error", { error: "network" });
-  }
-}
-
-/* ---------- Morceaux d'interface ---------- */
-
-const toolChip = (x) => `<li class="ai-tool" data-ok="${x.ok === null || x.ok === undefined ? "" : x.ok}">
-  <span class="ai-tool-mark" aria-hidden="true">${x.ok === false ? "✕" : x.ok ? "✓" : "…"}</span>${esc(x.label)}</li>`;
-
-function messageHtml(m) {
-  if (m.role === "user") {
-    if (m.kind) {
-      const key = { confirmed: "aiNoteConfirmed", refused: "aiNoteRefused", failed: "aiNoteFailed", report: "aiNoteReport" }[m.kind] ?? "aiNoteConfirmed";
-      return `<p class="mono ai-note" data-kind="${esc(m.kind)}">${esc(t(key))}</p>`;
-    }
-    return `<div class="ai-msg user"><div class="ai-bubble">${md(m.text)}</div></div>`;
-  }
-  const tools = m.tools?.length ? `<ul class="ai-tools">${m.tools.map(toolChip).join("")}</ul>` : "";
-  const text = m.text ? `<div class="ai-text">${md(m.text)}</div>` : "";
-  if (!tools && !text) return "";
-  return `<div class="ai-msg assistant">${tools}${text}</div>`;
-}
-
-function pendingHtml(p) {
-  const values = p.values && Object.keys(p.values).length
-    ? `<dl class="ai-values">${Object.entries(p.values).map(([k, v]) => `<dt class="mono">${esc(k)}</dt><dd>${esc(typeof v === "boolean" ? (v ? t("yes") : t("no")) : v)}</dd>`).join("")}</dl>`
-    : "";
-  return `<div class="ai-card${p.danger ? " danger" : ""}" data-pending="${esc(p.id)}" role="group" aria-label="${esc(t("aiPendingKicker"))}">
-    <p class="mono ai-card-kicker">${esc(t("aiPendingKicker"))}${p.space ? ` · ${esc(p.space)}` : ""}</p>
-    <p class="ai-card-title">${esc(p.title)}${p.row ? ` <span class="ai-card-row">— ${esc(p.row)}</span>` : ""}</p>
-    ${p.confirm ? `<p class="ai-card-text">${esc(p.confirm)}</p>` : ""}
-    ${values}
-    <div class="inline-actions">
-      <button class="btn ${p.danger ? "danger" : "signal"}" type="button" data-approve>${esc(t("aiApprove"))}</button>
-      <button class="btn ghost" type="button" data-refuse>${esc(t("cancel"))}</button>
-    </div>
-  </div>`;
-}
-
-const revealHtml = (r) => `<div class="invite-link a-reveal ai-reveal" role="status">
-  <span class="mono">${esc(r.label)}${r.space ? ` · ${esc(r.space)}` : ""} — ${esc(t("adminRevealOnce"))}</span>
-  <code>${esc(r.value)}</code>
-  <div><button class="text-btn mono" type="button" data-copy="${esc(r.value)}">${esc(t("copy2"))}</button></div>
-</div>`;
-
-const SUGGESTIONS = ["aiSuggest1", "aiSuggest2", "aiSuggest3", "aiSuggest4"];
-
 /* ---------- La page ---------- */
 
-let controller = null; // réponse en cours
+let current = null; // chat affiché (pour interrompre sa réponse en quittant la page)
 
 export async function renderAssistant(main, { id, sub }) {
-  controller?.abort();
-  controller = null;
+  current?.abort();
+  current = null;
   if (id === "reglages") return renderSettings(main);
   let info;
   try {
@@ -206,188 +72,35 @@ export async function renderAssistant(main, { id, sub }) {
             <h2 class="serif ai-chat-title">${esc(conv?.title ?? t("aiNew"))}</h2>
             ${conv ? `<button class="text-btn mono danger" type="button" id="ai-delete">${esc(t("aiDelete"))}</button>` : ""}
           </div>
-          <div class="ai-log" id="ai-log" aria-live="polite">
-            ${conv ? conv.messages.map(messageHtml).join("") : ""}
-          </div>
-          <div class="ai-pendings" id="ai-pendings">${conv ? conv.pending.map(pendingHtml).join("") : ""}</div>
-          <div class="ai-reveals" id="ai-reveals"></div>
-          ${conv ? "" : `<div class="chips ai-suggest">${SUGGESTIONS.map((k) => `<button class="chip" type="button" data-suggest>${esc(t(k))}</button>`).join("")}</div>`}
-          <form class="ai-compose" id="ai-form">
-            <label class="sr-only" for="ai-input">${esc(t("aiPlaceholder"))}</label>
-            <textarea class="input ai-input" id="ai-input" rows="2" maxlength="8000" placeholder="${esc(t("aiPlaceholder"))}"></textarea>
-            <button class="btn signal" type="submit" id="ai-send">${esc(t("aiSend"))} →</button>
-            <button class="btn ghost" type="button" id="ai-stop" hidden>${esc(t("aiStop"))}</button>
-          </form>
-          ${conv && (conv.usage.input || conv.usage.output) ? `<p class="mono ai-usage">${esc(t("aiUsage", conv.usage))}</p>` : ""}
+          <div class="ai-chat-box" id="ai-chat-box"></div>
         </div>
       </div>
     </section>`;
 
   if (!info.configured) return;
-  const log = $("#ai-log", main);
-  const input = $("#ai-input", main);
-  const form = $("#ai-form", main);
-  const sendBtn = $("#ai-send", main);
-  const stopBtn = $("#ai-stop", main);
-  let conversationId = conv?.id ?? null;
-  /** Fait voir le dernier élément arrivé : une carte (confirmation, valeur à copier) passe avant le texte. */
-  const scroll = () => {
-    const last = $("#ai-reveals", main).lastElementChild ?? $("#ai-pendings", main).lastElementChild ?? log.lastElementChild;
-    last?.scrollIntoView({ block: "end", behavior: "smooth" });
-  };
-
-  if (!sub) input.focus({ preventScroll: true });
-  scroll();
-
-  /** Affiche un tour de l'Assistant à partir des événements du flux. */
-  function consume(target) {
-    let msg = null;
-    let text = "";
-    const ensure = () => {
-      if (!msg) {
-        msg = document.createElement("div");
-        msg.className = "ai-msg assistant";
-        msg.innerHTML = `<ul class="ai-tools"></ul><div class="ai-text"><p class="ai-typing" aria-hidden="true"><span></span><span></span><span></span></p></div>`;
-        target.append(msg);
+  current = mountChat($("#ai-chat-box", main), {
+    conversation: conv,
+    autofocus: !sub,
+    onConversation: (data) => {
+      history.replaceState(null, "", `#/assistant/${data.id}`);
+      $(".ai-chat-title", main).textContent = data.title;
+      // La nouvelle conversation rejoint la liste de gauche.
+      const side = $(".ai-side", main);
+      let ul = $(".ai-convs", side);
+      if (!ul) {
+        $(".note", side)?.remove();
+        side.insertAdjacentHTML("beforeend", '<ul class="ai-convs"></ul>');
+        ul = $(".ai-convs", side);
       }
-      return msg;
-    };
-    const newTurn = () => {
-      msg = null;
-      text = "";
-    };
-    ensure();
-    return (ev, data) => {
-      switch (ev) {
-        case "conversation":
-          if (!conversationId) {
-            conversationId = data.id;
-            history.replaceState(null, "", `#/assistant/${data.id}`);
-            $(".ai-chat-title", main).textContent = data.title;
-            // La nouvelle conversation rejoint la liste de gauche.
-            const side = $(".ai-side", main);
-            let ul = $(".ai-convs", side);
-            if (!ul) {
-              $(".note", side)?.remove();
-              side.insertAdjacentHTML("beforeend", '<ul class="ai-convs"></ul>');
-              ul = $(".ai-convs", side);
-            }
-            ul.insertAdjacentHTML("afterbegin", convItem({ id: data.id, title: data.title, source: "chat", updatedAt: Date.now() }, data.id));
-          }
-          break;
-        case "text":
-          text += data.delta;
-          $(".ai-text", ensure()).innerHTML = md(text);
-          scroll();
-          break;
-        case "tool_start": {
-          // Le texte d'avant un outil appartient à ce tour ; les outils suivants ouvrent un nouveau bloc s'il y a déjà du texte.
-          if (text) newTurn();
-          const li = document.createElement("li");
-          li.className = "ai-tool";
-          li.dataset.id = data.id;
-          li.innerHTML = `<span class="ai-tool-mark" aria-hidden="true">…</span>${esc(data.label)}`;
-          $(".ai-tools", ensure()).append(li);
-          scroll();
-          break;
-        }
-        case "tool_end": {
-          const li = $(`.ai-tool[data-id="${CSS.escape(data.id)}"]`, log);
-          if (li) {
-            li.dataset.ok = String(data.ok);
-            $(".ai-tool-mark", li).textContent = data.ok ? "✓" : "✕";
-            if (!data.ok && data.error) li.title = data.error;
-          }
-          break;
-        }
-        case "pending":
-          $("#ai-pendings", main).insertAdjacentHTML("beforeend", pendingHtml(data));
-          scroll();
-          break;
-        case "reveal":
-          $("#ai-reveals", main).insertAdjacentHTML("beforeend", revealHtml(data));
-          scroll();
-          break;
-        case "decision":
-          if (data.status === "failed") toast(data.error ?? errorText("generic"), "error");
-          break;
-        case "error": {
-          const p = document.createElement("p");
-          p.className = "error ai-error";
-          p.setAttribute("role", "alert");
-          p.textContent = data.message ? `${errorText(data.error, data)} — ${data.message}` : errorText(data.error, data);
-          log.append(p);
-          scroll();
-          break;
-        }
-        default:
-          break;
-      }
-    };
-  }
-
-  /** Nettoie les blocs vides (un tour sans texte ni outil) et les points d'attente. */
-  const tidy = () => {
-    $$(".ai-typing", log).forEach((el) => el.remove());
-    $$(".ai-msg.assistant", log).forEach((el) => {
-      if (!$(".ai-tool", el) && !$(".ai-text", el)?.textContent.trim()) el.remove();
-    });
-  };
-
-  async function run(url, body) {
-    controller = new AbortController();
-    sendBtn.hidden = true;
-    stopBtn.hidden = false;
-    input.disabled = true;
-    $(".ai-suggest", main)?.remove();
-    const onEvent = consume(log);
-    await stream(url, { ...body, lang }, onEvent, controller.signal);
-    tidy();
-    controller = null;
-    sendBtn.hidden = false;
-    stopBtn.hidden = true;
-    input.disabled = false;
-    input.focus({ preventScroll: true });
-  }
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = input.value.trim();
-    if (!text || controller) return;
-    input.value = "";
-    log.insertAdjacentHTML("beforeend", messageHtml({ role: "user", text }));
-    scroll();
-    await run(`${base}/messages`, { text, conversation: conversationId });
-  });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      form.requestSubmit();
-    }
-  });
-  stopBtn.addEventListener("click", () => controller?.abort());
-  $$("[data-suggest]", main).forEach((b) => b.addEventListener("click", () => {
-    input.value = b.textContent;
-    form.requestSubmit();
-  }));
-
-  $("#ai-pendings", main).addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-approve], [data-refuse]");
-    if (!b || controller) return;
-    const card = b.closest("[data-pending]");
-    const approve = b.hasAttribute("data-approve");
-    $$("button", card).forEach((x) => { x.disabled = true; });
-    card.classList.add("decided");
-    log.insertAdjacentHTML("beforeend", messageHtml({ role: "user", kind: approve ? "confirmed" : "refused" }));
-    card.remove();
-    await run(`${base}/pending/${encodeURIComponent(card.dataset.pending)}`, { approve });
+      ul.insertAdjacentHTML("afterbegin", convItem({ id: data.id, title: data.title, source: "chat", updatedAt: Date.now() }, data.id));
+    },
   });
 
   $("#ai-delete", main)?.addEventListener("click", async () => {
     const ok = await confirmBox({ title: t("aiDeleteTitle"), text: t("aiDeleteText"), ok: t("aiDelete"), danger: true });
     if (!ok) return;
     try {
-      await api.del(`${base}/conversations/${encodeURIComponent(conversationId)}`);
+      await api.del(`${base}/conversations/${encodeURIComponent(conv.id)}`);
       go("#/assistant");
     } catch (ex) {
       toast(errorText(ex.code, ex.extra), "error");
@@ -560,6 +273,7 @@ async function renderSettings(main) {
     try {
       const d = draft();
       ai = await api.put(`${base}/settings`, { provider: d.provider, baseUrl: d.baseUrl, model: d.model, ...(d.apiKey ? { apiKey: d.apiKey } : {}) });
+      state.assistant = { configured: ai.configured }; // l'accueil montre (ou non) l'Assistant
       $("#ai-key", main).value = "";
       $("#ai-key", main).placeholder = ai.hasApiKey ? t("aiKeyKept") : "";
       toast(ai.configured ? t("aiSavedReady") : t("saved"));

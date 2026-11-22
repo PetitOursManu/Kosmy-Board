@@ -190,6 +190,7 @@ export async function reloadState() {
   state.user = s.user;
   state.setupNeeded = s.setupNeeded;
   state.config = s.config;
+  state.assistant = s.assistant ?? null;
   state.spaces = null;
   return s;
 }
