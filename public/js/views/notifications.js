@@ -10,6 +10,8 @@ import { $, $$, busy, confirmBox, esc, logoTile, toast } from "../ui.js";
  */
 function linkOf(n) {
   if (!n.url) return null;
+  // Une page du Board lui-même (bilan de l'Assistant) : on y va dans cet onglet.
+  if (isBoardLink(n.url)) return n.url.slice(location.origin.length);
   const space = state.spaces?.find((s) => s.id === n.app.spaceId);
   if (!space?.sso?.loginUri || !state.config.issuer) return n.url;
   const u = new URL(space.sso.loginUri);
@@ -18,9 +20,12 @@ function linkOf(n) {
   return u.href;
 }
 
+const isBoardLink = (url) => url.startsWith(`${location.origin}/#/`);
+
 function itemHtml(n) {
   const app = n.app.appId ? state.catalog?.appById[n.app.appId] : undefined;
   const link = linkOf(n);
+  const internal = n.url && isBoardLink(n.url);
   return `
     <li class="notif${n.read ? "" : " unread"}" data-id="${n.id}">
       ${logoTile(app, n.app.name, "sm")}
@@ -30,7 +35,9 @@ function itemHtml(n) {
         ${n.body ? `<p class="notif-body">${esc(n.body)}</p>` : ""}
       </div>
       <div class="notif-actions">
-        ${link ? `<a class="text-btn mono" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-open>${esc(t("notifOpen"))} ↗</a>` : ""}
+        ${link ? (internal
+          ? `<a class="text-btn mono" href="${esc(link)}" data-open data-internal>${esc(t("notifOpen"))} →</a>`
+          : `<a class="text-btn mono" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-open>${esc(t("notifOpen"))} ↗</a>`) : ""}
         ${n.read ? "" : `<button class="text-btn mono" type="button" data-read>${esc(t("notifMarkRead"))}</button>`}
         <button class="text-btn mono danger" type="button" data-remove aria-label="${esc(t("notifRemove"))}">✕</button>
       </div>
@@ -99,9 +106,11 @@ export async function renderNotifications(main) {
     const id = Number(li.dataset.id);
     const markRead = () => api.post("api/notifications/read", { ids: [id] }).then((r) => setUnread(r.unread));
     // Ouvrir la page de l'appli la marque comme lue, sans quitter la liste.
-    $("[data-open]", li)?.addEventListener("click", () => {
+    $("[data-open]", li)?.addEventListener("click", (e) => {
       if (!li.classList.contains("unread")) return;
-      markRead().then(rerender).catch(() => {});
+      // Lien vers une page du Board : on la quitte, inutile de redessiner la liste.
+      if (e.currentTarget.hasAttribute("data-internal")) markRead().catch(() => {});
+      else markRead().then(rerender).catch(() => {});
     });
     $("[data-read]", li)?.addEventListener("click", () => markRead().then(rerender).catch(fail));
     $("[data-remove]", li).addEventListener("click", async () => {

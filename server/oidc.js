@@ -8,7 +8,8 @@
  */
 import { generateKeyPairSync, randomBytes, createHash } from "node:crypto";
 
-import Provider, { interactionPolicy } from "oidc-provider";
+import { importJWK, jwtVerify } from "jose";
+import Provider, { errors, interactionPolicy } from "oidc-provider";
 
 import { currentUser } from "./auth.js";
 import { config } from "./config.js";
@@ -85,7 +86,9 @@ class SqliteAdapter {
   async find(id) {
     if (this.model === "Client") {
       const row = db.prepare("SELECT * FROM sso_clients WHERE client_id = ?").get(id);
-      return row ? clientMetadata(row) : undefined;
+      if (row) return clientMetadata(row);
+      // Clients MCP inscrits d'eux-mêmes (inscription dynamique) : gardés comme les autres modèles.
+      if (!isMcpClientId(id)) return undefined;
     }
     return this.#read(db.prepare("SELECT * FROM oidc_store WHERE model = ? AND id = ?").get(this.model, id));
   }
@@ -121,7 +124,61 @@ export function purgeOidc() {
 export const userHasClient = (userId, clientId) =>
   Boolean(db.prepare("SELECT 1 FROM spaces WHERE user_id = ? AND client_id = ?").get(userId, clientId));
 
-const clientName = (clientId) => db.prepare("SELECT name FROM sso_clients WHERE client_id = ?").get(clientId)?.name ?? clientId;
+/* ---------- Clients MCP (Claude, autres clients MCP) : OAuth pour le serveur MCP du Board ---------- */
+
+/** La ressource protégée (server/mcp.js) et le préfixe des clients inscrits par inscription dynamique. */
+export const MCP_RESOURCE = `${config.publicUrl}/mcp`;
+export const MCP_SCOPE = "kosmy:mcp";
+export const isMcpClientId = (id) => typeof id === "string" && id.startsWith("mcp-");
+
+function mcpClient(clientId) {
+  const row = db.prepare("SELECT payload FROM oidc_store WHERE model = 'Client' AND id = ?").get(clientId);
+  return row ? JSON.parse(row.payload) : null;
+}
+
+/** Autorisations données à des clients MCP par cette personne. */
+export function listMcpGrants(userId) {
+  return db.prepare("SELECT id, payload FROM oidc_store WHERE model = 'Grant' AND json_extract(payload, '$.accountId') = ?").all(userId)
+    .map((r) => ({ id: r.id, p: JSON.parse(r.payload) }))
+    .filter((g) => isMcpClientId(g.p.clientId))
+    .map((g) => ({ id: g.id, clientId: g.p.clientId, client: mcpClient(g.p.clientId)?.client_name ?? g.p.clientId, createdAt: (g.p.iat ?? 0) * 1000 }));
+}
+
+/** Retire une autorisation : ses jetons (d'accès et de rafraîchissement) disparaissent avec elle. */
+export function revokeMcpGrant(userId, grantId) {
+  const g = db.prepare("SELECT payload FROM oidc_store WHERE model = 'Grant' AND id = ?").get(grantId);
+  const p = g ? JSON.parse(g.payload) : null;
+  if (!p || p.accountId !== userId || !isMcpClientId(p.clientId)) return false;
+  db.prepare("DELETE FROM oidc_store WHERE grant_id = ? OR (model = 'Grant' AND id = ?)").run(grantId, grantId);
+  return true;
+}
+
+let publicKey = null;
+/**
+ * Jeton d'accès OAuth présenté au serveur MCP : un JWT signé par le Board, émis pour la ressource /mcp,
+ * à un client MCP dont l'autorisation existe toujours. Renvoie l'identifiant du compte, ou null.
+ */
+export async function verifyMcpAccessToken(tok, resource = MCP_RESOURCE) {
+  if (tok.split(".").length !== 3) return null;
+  try {
+    const { kty, n, e, kid } = signingJwk();
+    publicKey ??= await importJWK({ kty, n, e }, "RS256");
+    const { payload, protectedHeader } = await jwtVerify(tok, publicKey, { issuer: ISSUER, audience: resource, algorithms: ["RS256"] });
+    if (protectedHeader.kid && protectedHeader.kid !== kid) return null;
+    if (protectedHeader.typ && protectedHeader.typ.toLowerCase() !== "at+jwt") return null;
+    if (!isMcpClientId(payload.client_id) || typeof payload.sub !== "string") return null;
+    // Autorisation retirée dans le Board : ses jetons ne valent plus, même avant leur expiration.
+    const grant = db.prepare(
+      "SELECT 1 FROM oidc_store WHERE model = 'Grant' AND json_extract(payload, '$.accountId') = ? AND json_extract(payload, '$.clientId') = ? AND (expires_at IS NULL OR expires_at > ?)",
+    ).get(payload.sub, payload.client_id, Date.now());
+    return grant ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+const clientName = (clientId) =>
+  db.prepare("SELECT name FROM sso_clients WHERE client_id = ?").get(clientId)?.name ?? mcpClient(clientId)?.client_name ?? clientId;
 const clientBase = (clientId) => db.prepare("SELECT base FROM sso_clients WHERE client_id = ?").get(clientId)?.base ?? null;
 
 /* ---------- Le fournisseur ---------- */
@@ -132,7 +189,8 @@ const policy = basePolicy();
 policy.get("login").checks.add(new Check("kosmy_board", "Kosmy Board session and access are required", (ctx) => {
   const user = currentUser(ctx.req);
   if (!user || user.id !== ctx.oidc.session?.accountId) return Check.REQUEST_PROMPT;
-  if (!userHasClient(user.id, ctx.oidc.client.clientId)) return Check.REQUEST_PROMPT;
+  // Un client MCP n'est pas une instance reliée : la personne donne son accord sur la page de consentement.
+  if (!isMcpClientId(ctx.oidc.client.clientId) && !userHasClient(user.id, ctx.oidc.client.clientId)) return Check.REQUEST_PROMPT;
   return Check.NO_NEED_TO_PROMPT;
 }));
 
@@ -206,20 +264,43 @@ export const provider = new Provider(ISSUER, {
         sendPage(ctx, page({ lang, kicker: "Kosmy Board", title: t.loggedOut, body: `<p class="lead">${t.loggedOutText(app)}</p>` }));
       },
     },
+    /*
+     * Serveur MCP (docs/assistant.md) : un client MCP (Claude, Claude Desktop…) s'inscrit lui-même,
+     * puis la personne se connecte au Board et donne son accord. Ses jetons valent seulement pour /mcp.
+     */
+    registration: {
+      enabled: true,
+      idFactory: () => `mcp-${randomBytes(16).toString("base64url")}`,
+    },
+    resourceIndicators: {
+      enabled: true,
+      defaultResource: (ctx, client, oneOf) => oneOf ?? (isMcpClientId(client?.clientId) ? MCP_RESOURCE : undefined),
+      useGrantedResource: () => true,
+      getResourceServerInfo(ctx, resourceIndicator, client) {
+        if (resourceIndicator !== MCP_RESOURCE || !isMcpClientId(client?.clientId)) throw new errors.InvalidTarget();
+        return { scope: MCP_SCOPE, audience: MCP_RESOURCE, accessTokenTTL: 3600, accessTokenFormat: "jwt", jwt: { sign: { alg: "RS256" } } };
+      },
+    },
   },
+  /* Les instances reliées et les clients MCP n'utilisent que le flux « code ». */
+  responseTypes: ["code"],
   pkce: {
-    // PKCE obligatoire pour les clients sans secret ; conseillé (et accepté) pour les autres.
-    required: (ctx, client) => client.tokenEndpointAuthMethod === "none",
+    // PKCE obligatoire pour les clients sans secret et pour tous les clients MCP ; conseillé (et accepté) pour les autres.
+    required: (ctx, client) => client.tokenEndpointAuthMethod === "none" || isMcpClientId(client.clientId),
   },
+  /* Jeton de rafraîchissement : seulement pour un client MCP qui l'a demandé à son inscription. */
+  issueRefreshToken: (ctx, client) => isMcpClientId(client.clientId) && client.grantTypeAllowed("refresh_token"),
   ttl: {
     AccessToken: 3600,
     AuthorizationCode: 60,
     IdToken: 3600,
     Interaction: 600,
     Session: 14 * 86_400,
-    Grant: 14 * 86_400,
+    Grant: (ctx, grant) => (isMcpClientId(grant.clientId) ? 90 * 86_400 : 14 * 86_400),
+    RefreshToken: 30 * 86_400,
   },
-  clientBasedCORS: () => false,
+  /* Les pages de la connexion unique ne sont jamais appelées depuis un autre site ; un client MCP peut l'être (inspecteur MCP…). */
+  clientBasedCORS: (ctx, origin, client) => isMcpClientId(client?.clientId),
   async renderError(ctx, out) {
     const lang = pageLang(ctx.req, currentUser(ctx.req));
     const t = tr(lang);
@@ -250,16 +331,18 @@ async function handleInteraction(req, res, uid, action) {
     return;
   }
 
+  const mcp = isMcpClientId(clientId);
   if (action === "abort") {
     if (req.method !== "POST" || !sameOrigin(req)) {
       res.writeHead(405).end();
       return;
     }
-    await provider.interactionFinished(req, res, { error: "access_denied", error_description: "No Kosmy Board space is linked to this app" }, { mergeWithLastSubmission: false });
+    const description = mcp ? "The person refused access to Kosmy Board" : "No Kosmy Board space is linked to this app";
+    await provider.interactionFinished(req, res, { error: "access_denied", error_description: description }, { mergeWithLastSubmission: false });
     return;
   }
 
-  if (!userHasClient(user.id, clientId)) {
+  if (!mcp && !userHasClient(user.id, clientId)) {
     const lang = pageLang(req, user);
     const t = tr(lang);
     res.writeHead(403, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
@@ -281,7 +364,34 @@ async function handleInteraction(req, res, uid, action) {
     return;
   }
 
-  // Seconde étape : le consentement, donné d'office (l'espace relié vaut accord).
+  // Client MCP : la personne doit donner son accord, sur une page du Board (formulaire envoyé à ce même Board).
+  if (mcp && action !== "confirm") {
+    const lang = pageLang(req, user);
+    const t = tr(lang);
+    let host = "";
+    try {
+      host = new URL(details.params.redirect_uri).host;
+    } catch { /* adresse absente */ }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(page({
+      lang, kicker: "Kosmy Board · MCP", title: t.mcpTitle,
+      body: `<p class="lead">${t.mcpText(esc(app), esc(user.name))}</p>
+        <p class="note mono">${t.mcpReturn} : ${esc(host)}</p>
+        <p class="note">${t.mcpWarn}</p>
+        <div class="form-actions">
+          <form method="post" action="${MOUNT}/interaction/${esc(uid)}/confirm"><button class="btn signal" type="submit" autofocus>${t.mcpAllow}</button></form>
+          <form method="post" action="${MOUNT}/interaction/${esc(uid)}/abort"><button class="btn ghost" type="submit">${t.mcpDeny}</button></form>
+        </div>`,
+    }));
+    return;
+  }
+  if (mcp && (req.method !== "POST" || !sameOrigin(req))) {
+    res.writeHead(405).end();
+    return;
+  }
+
+  // Seconde étape : le consentement, donné d'office pour une instance reliée (l'espace relié vaut accord),
+  // après la page d'accord pour un client MCP.
   const { missingOIDCScope, missingOIDCClaims, missingResourceScopes } = details.prompt.details;
   const grant = details.grantId ? await provider.Grant.find(details.grantId) : new provider.Grant({ accountId: user.id, clientId });
   if (missingOIDCScope) grant.addOIDCScope(missingOIDCScope.join(" "));
@@ -295,7 +405,7 @@ const callback = provider.callback();
 
 /** Toutes les requêtes sous /oidc arrivent ici. */
 export async function handleOidc(req, res, pathname) {
-  const m = pathname.match(/^\/oidc\/interaction\/([\w-]{1,64})(?:\/(abort))?$/);
+  const m = pathname.match(/^\/oidc\/interaction\/([\w-]{1,64})(?:\/(abort|confirm))?$/);
   if (m) {
     try {
       await handleInteraction(req, res, m[1], m[2]);
@@ -309,9 +419,27 @@ export async function handleOidc(req, res, pathname) {
     }
     return;
   }
+  // Un client MCP qui ne demande aucune portée reçoit celle du serveur MCP (sinon il n'y aurait rien à accorder).
+  if (pathname === `${MOUNT}/auth` && req.method === "GET") {
+    const u = new URL(req.url, "http://board");
+    if (isMcpClientId(u.searchParams.get("client_id")) && !u.searchParams.get("scope")) {
+      u.searchParams.set("scope", MCP_SCOPE);
+      req.url = `${u.pathname}${u.search}`;
+    }
+  }
   // oidc-provider est monté sous /oidc : il voit l'adresse sans ce préfixe.
   req.originalUrl = req.url;
   req.url = req.url.slice(MOUNT.length) || "/";
+  callback(req, res);
+}
+
+/**
+ * Métadonnées du serveur d'autorisation à la racine du domaine (RFC 8414 : /.well-known/oauth-authorization-server/oidc),
+ * là où les clients MCP les cherchent : le même document que la découverte OpenID Connect.
+ */
+export function serveAuthServerMetadata(req, res) {
+  req.originalUrl = `${MOUNT}/.well-known/openid-configuration`;
+  req.url = "/.well-known/openid-configuration";
   callback(req, res);
 }
 

@@ -12,6 +12,7 @@ import { renderAccount } from "./views/account.js";
 import { renderSso } from "./views/sso.js";
 import { renderAdmin } from "./views/admin.js";
 import { renderNotifications } from "./views/notifications.js";
+import { renderAssistant, renderReveal } from "./views/assistant.js";
 
 /** État partagé par les vues. */
 export const state = {
@@ -73,6 +74,13 @@ function updateHeader() {
     acc.toggleAttribute("aria-current", location.hash.startsWith("#/compte"));
     if (location.hash.startsWith("#/compte")) acc.setAttribute("aria-current", "page");
   }
+
+  const ai = $("#ai-link");
+  ai.hidden = !state.user;
+  ai.setAttribute("aria-label", t("aiNav"));
+  ai.title = t("aiNav");
+  if (location.hash.startsWith("#/assistant")) ai.setAttribute("aria-current", "page");
+  else ai.removeAttribute("aria-current");
 
   const bell = $("#bell-link");
   bell.hidden = !state.user;
@@ -162,6 +170,10 @@ export async function route() {
       return renderAdmin(main, { id: parts[1], section: parts[2] });
     case "notifications":
       return renderNotifications(main);
+    case "assistant":
+      return renderAssistant(main, { id: parts[1], sub: parts[2] });
+    case "valeur":
+      return renderReveal(main, parts[1]);
     default:
       return renderList(main, { rerender: sameRoute });
   }

@@ -108,6 +108,70 @@ const MIGRATIONS = [
   );
   CREATE INDEX notifications_user ON notifications(user_id, id);
   `,
+  /* v5 : l'Assistant (docs/assistant.md) — conversations, actions en attente de confirmation, journal, bilans, accès MCP. */
+  `
+  CREATE TABLE ai_conversations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'chat' CHECK (source IN ('chat', 'report')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX ai_conversations_user ON ai_conversations(user_id, updated_at);
+  CREATE TABLE ai_messages (
+    conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    usage TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (conversation_id, seq)
+  );
+  CREATE TABLE ai_pending (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE CASCADE,
+    call_id TEXT,
+    tool TEXT NOT NULL,
+    args TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'refused', 'failed', 'expired')),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX ai_pending_conversation ON ai_pending(conversation_id);
+  CREATE TABLE ai_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    space_id TEXT,
+    space_name TEXT,
+    detail TEXT,
+    ok INTEGER NOT NULL,
+    message TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX ai_audit_user ON ai_audit(user_id, id);
+  CREATE TABLE ai_reports (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    frequency TEXT NOT NULL DEFAULT 'off' CHECK (frequency IN ('off', 'daily', 'weekly')),
+    hour INTEGER NOT NULL DEFAULT 8,
+    weekday INTEGER NOT NULL DEFAULT 1,
+    last_run_at INTEGER
+  );
+  CREATE TABLE mcp_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    expires_at INTEGER
+  );
+  CREATE INDEX mcp_tokens_user ON mcp_tokens(user_id);
+  `,
 ];
 
 /** Petites valeurs persistantes (clés de signature, secrets des cookies). */

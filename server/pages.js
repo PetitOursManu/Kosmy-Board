@@ -16,6 +16,12 @@ const T = {
     loggedOut: "Vous êtes <em>déconnecté</em>",
     loggedOutText: (app) => `La connexion à ${app} par Kosmy Board est terminée.`,
     details: "Détail technique",
+    mcpTitle: "Autoriser <em>l'accès</em> ?",
+    mcpText: (app, name) => `« ${app} » demande à gérer vos instances Kosmy en votre nom, ${name} : lire leur administration, et y agir avec vos droits.`,
+    mcpReturn: "Retour vers",
+    mcpWarn: "N'acceptez que si vous venez de connecter ce client (Claude, Claude Desktop, Claude Code…) au Board. Vous pourrez retirer cet accès dans Compte → Accès MCP.",
+    mcpAllow: "Autoriser →",
+    mcpDeny: "Refuser",
   },
   en: {
     error: "Sign-in <em>failed</em>",
@@ -31,6 +37,12 @@ const T = {
     loggedOut: "You're <em>signed out</em>",
     loggedOutText: (app) => `Your Kosmy Board sign-in to ${app} has ended.`,
     details: "Technical detail",
+    mcpTitle: "Allow <em>access</em>?",
+    mcpText: (app, name) => `“${app}” asks to manage your Kosmy instances on your behalf, ${name}: read their admin and act in it with your rights.`,
+    mcpReturn: "Returning to",
+    mcpWarn: "Only accept if you just connected this client (Claude, Claude Desktop, Claude Code…) to the Board. You can remove this access in Account → MCP access.",
+    mcpAllow: "Allow →",
+    mcpDeny: "Deny",
   },
 };
 

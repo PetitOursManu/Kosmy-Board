@@ -9,7 +9,10 @@ import { fileURLToPath } from "node:url";
 import { handleApi } from "./api.js";
 import { ensureSetupCode, purgeExpired } from "./auth.js";
 import { config } from "./config.js";
-import { handleOidc, purgeOidc } from "./oidc.js";
+import { handleOidc, ISSUER, MCP_RESOURCE, MCP_SCOPE, purgeOidc, serveAuthServerMetadata } from "./oidc.js";
+import { handleMcp, MCP_PATH } from "./mcp.js";
+import { purgeAssistant } from "./ai/agent.js";
+import { runDueReports } from "./ai/reports.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -140,6 +143,23 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (pathname.startsWith("/api/")) return handleApi(req, res, pathname);
+  /* Serveur MCP (docs/assistant.md) et ses métadonnées OAuth. */
+  if (pathname === MCP_PATH) return handleMcp(req, res);
+  if (pathname === "/.well-known/oauth-protected-resource" || pathname === `/.well-known/oauth-protected-resource${MCP_PATH}`) {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" });
+    res.end(JSON.stringify({
+      resource: MCP_RESOURCE,
+      authorization_servers: [ISSUER],
+      scopes_supported: [MCP_SCOPE],
+      bearer_methods_supported: ["header"],
+      resource_name: "Kosmy Board",
+      resource_documentation: "https://github.com/PetitOursManu/Kosmy-Board/blob/main/docs/assistant.md",
+    }));
+    return;
+  }
+  if (["/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server/oidc", "/.well-known/openid-configuration/oidc"].includes(pathname)) {
+    return serveAuthServerMetadata(req, res);
+  }
   if (pathname === "/oidc" || pathname.startsWith("/oidc/")) return handleOidc(req, res, pathname);
   /* Certaines bibliothèques cherchent la découverte à la racine du domaine. */
   if (pathname === "/.well-known/openid-configuration") {
@@ -167,8 +187,12 @@ server.listen(config.port, () => {
 const purge = () => {
   purgeExpired();
   purgeOidc();
+  purgeAssistant();
 };
 purge();
 setInterval(purge, 3_600_000).unref();
+
+/* Bilans de l'Assistant : vérifiés chaque minute. */
+setInterval(() => runDueReports().catch((e) => console.error("Bilans :", e)), 60_000).unref();
 
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => server.close(() => process.exit(0)));

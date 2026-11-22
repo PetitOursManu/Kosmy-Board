@@ -12,6 +12,8 @@ avec la même identité visuelle que le site Kosmy.
   propose « Se connecter avec Kosmy Board », et « Ouvrir » vous y connecte directement.
 - **Admin dans le Board** : une fois reliée, une instance s'administre depuis le Board lui-même
   (comptes, réglages, maintenance…), sans ouvrir l'appli.
+- **Assistant IA** : on lui demande en quelques mots, il lit l'admin de toutes vos instances et agit pour vous
+  (les actions dangereuses attendent votre confirmation). Bilans planifiés, et serveur **MCP** pour Claude.
 - **Double authentification** (TOTP, avec codes de secours) pour les comptes du Board.
 - **Synchronisation avec Kosmy Mobile** : on se connecte une fois dans l'onglet Admin de l'appli, et les espaces sont les mêmes partout.
 - **Export / import** en JSON, au format des espaces admin de Kosmy Mobile.
@@ -75,6 +77,24 @@ Elles arrivent dans la **cloche** de l'en-tête du Board et, avec Kosmy Mobile, 
 - Le Board garde les 200 dernières de chaque personne. **Tout marquer comme lu** et **Tout supprimer** sur la page Notifications.
 - Pour une autre appli : le [guide des notifications](docs/notifications.md).
 
+## Assistant IA
+
+L'icône ✦ de l'en-tête ouvre l'**Assistant** : « quelles instances ont une alerte ? », « ferme les inscriptions partout »,
+« invite lea@… sur Kanby ». Il se sert de l'admin dans le Board, donc de toute appli qui suit son protocole.
+
+- **Avec votre identité** : chaque appli revérifie vos droits, comme pour le bouton « Admin ».
+- **Les actions dangereuses attendent votre confirmation** (une carte « À confirmer » dans la conversation) ;
+  le reste s'exécute directement et tout est inscrit au **journal**.
+- **Aucun secret chez le fournisseur d'IA** : le modèle ne remplit jamais un mot de passe, et les valeurs à montrer une fois
+  (lien d'invitation, mot de passe temporaire) vous sont affichées sans passer par lui.
+- **Fournisseur au choix** (réglé par un administrateur) : OpenRouter, OpenAI, Anthropic, Gemini, Mistral…, ou un modèle local
+  (Ollama, LM Studio). La clé reste chiffrée sur le serveur.
+- **Bilans planifiés** : chaque jour ou chaque semaine, un résumé de santé de vos instances dans la cloche et sur Kosmy Mobile.
+- **Serveur MCP** (`/mcp`) : les mêmes outils dans claude.ai, Claude Desktop (connecteur personnalisé, connexion OAuth par le Board)
+  ou Claude Code (jeton personnel). *Compte → Accès MCP*.
+
+Le détail, les variables `AI_*` et l'API : [docs/assistant.md](docs/assistant.md).
+
 ## Kosmy Mobile
 
 Dans Kosmy Mobile, onglet **Admin** → **Kosmy Board** → **Se connecter** : l'adresse du Board, l'e-mail et le mot de passe
@@ -129,8 +149,10 @@ Le guide pas à pas, avec la sauvegarde et les problèmes courants : **[Installe
 | `SESSION_DAYS` | `30` | Durée d'une session du Board. |
 | `DEVICE_DAYS` | `365` | Durée de la connexion de Kosmy Mobile, prolongée à chaque utilisation. |
 | `CATALOG_URL` | catalogue de Kosmy Mobile sur GitHub | Catalogue des applis (une copie de secours est embarquée). |
+| `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | — | Fournisseur de l'Assistant, s'il est imposé par le serveur (sinon : *Assistant → Réglages*). Voir [docs/assistant.md](docs/assistant.md). |
+| `TZ` | celui du serveur | Fuseau horaire des bilans de l'Assistant, par exemple `Europe/Paris`. |
 
-Voir aussi [`.env.example`](.env.example).
+Voir aussi [`.env.example`](.env.example). L'Assistant garde sa clé de chiffrement dans `DATA_DIR/secret.key` : sauvegardez-la avec le volume.
 
 ## Développement
 
@@ -166,6 +188,11 @@ y est administrateur) : **Admin** affiche alors son administration dans le Board
 - Admin dans le Board : jeton JWT RS256 (`typ: kb-admin+jwt`, distinct des ID tokens) lié à la méthode et à l'adresse
   appelées, 60 secondes, usage unique ; seulement pour un espace relié de la personne. L'appli revérifie les droits.
   Les réponses de l'appli sont réduites à un format strict et affichées en texte brut ; redirections non suivies, 2 Mo et 15 s au plus.
+- Assistant : mêmes droits que la personne ; actions dangereuses exécutées seulement après sa confirmation (ou l'accord demandé
+  par le client MCP) ; champs mot de passe et valeurs à montrer une fois jamais transmis au fournisseur d'IA ; journal des actions ;
+  clé du fournisseur chiffrée (AES-256-GCM, clé dans `DATA_DIR/secret.key`).
+- Serveur MCP : jetons personnels stockés hachés ; OAuth avec PKCE obligatoire, consentement explicite, jetons d'accès JWT
+  limités à la ressource `/mcp` et invalidés dès que l'autorisation est retirée ; `Origin` vérifié.
 - CSP stricte, pas d'iframe, pas de script tiers, `Referrer-Policy: no-referrer`.
 
 Sauvegardez le dossier `/data` : il contient les comptes, les espaces et les clés de signature OpenID Connect.
