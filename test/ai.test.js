@@ -232,3 +232,27 @@ test("limite d'étapes, réglage des bilans, droits des membres", async () => {
   const mine = (await admin.request("GET", "/api/assistant")).body.conversations[0].id;
   assert.equal((await member.request("GET", `/api/assistant/conversations/${mine}`)).status, 404);
 });
+
+test("bilan : lecture seule, gardé comme conversation, envoyé en notification", async () => {
+  script = (body) => (turn(body) === 0 ? { toolCalls: [{ name: "fleet_overview" }] } : { content: "**Tout va bien.**\n- Démo : aucune alerte" });
+  const r = await admin.request("POST", "/api/assistant/report/run", {});
+  assert.equal(r.status, 202, r.text);
+  let notif;
+  for (let i = 0; i < 50 && !notif; i++) {
+    await new Promise((ok) => setTimeout(ok, 100));
+    notif = (await admin.request("GET", "/api/notifications")).body.notifications.find((n) => n.app.name === "Kosmy Board");
+  }
+  assert.ok(notif, "notification reçue");
+  assert.equal(notif.title, "Bilan de vos instances");
+  assert.match(notif.body, /^Tout va bien\.\n• Démo : aucune alerte$/);
+  const convId = notif.url.split("/").pop();
+  assert.ok(notif.url.startsWith(`${srv.base}/#/assistant/`));
+  const conv = (await admin.request("GET", `/api/assistant/conversations/${convId}`)).body;
+  assert.equal(conv.source, "report");
+  assert.equal(conv.messages[0].kind, "report");
+  // Seulement des outils de lecture.
+  const offered = requests.at(-2).tools.map((t) => t.function.name);
+  assert.ok(offered.includes("fleet_overview"));
+  for (const name of ["run_admin_action", "delete_space", "add_space", "invite_member", "set_report_settings"]) assert.equal(offered.includes(name), false, name);
+  assert.ok((await admin.request("GET", "/api/assistant")).body.report.lastRunAt);
+});

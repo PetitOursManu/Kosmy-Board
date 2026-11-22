@@ -23,6 +23,7 @@ import {
 } from "./ai/agent.js";
 import { aiTarget, cleanBaseUrl, preset as providerPreset, publicAiConfig, saveAiConfig } from "./ai/config.js";
 import { AiError, listModels, testTarget } from "./ai/providers.js";
+import { runReport } from "./ai/reports.js";
 import { takeReveal } from "./ai/reveals.js";
 import { reportSettings, saveReportSettings } from "./ai/tools.js";
 
@@ -639,6 +640,15 @@ route("POST", /^\/api\/assistant\/reveal\/([\w-]{20,40})$/, (req, res, user, [id
 
 route("PUT", /^\/api\/assistant\/report$/, async (req, res, user) => {
   send(res, 200, saveReportSettings(user.id, await readJson(req)));
+});
+
+/* Un bilan tout de suite : il tourne en arrière-plan et arrive en notification. */
+route("POST", /^\/api\/assistant\/report\/run$/, (req, res, user) => {
+  if (!publicAiConfig().configured) throw new HttpError(409, "ai_not_configured");
+  checkRate(user.id);
+  saveReportSettings(user.id, {}); // crée la ligne si besoin (last_run_at y est noté)
+  runReport(user).catch((e) => console.error("Bilan :", e));
+  send(res, 202, { ok: true });
 });
 
 route("GET", /^\/api\/assistant\/audit$/, (req, res, user) => {

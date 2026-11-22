@@ -10,6 +10,8 @@ import { handleApi } from "./api.js";
 import { ensureSetupCode, purgeExpired } from "./auth.js";
 import { config } from "./config.js";
 import { handleOidc, purgeOidc } from "./oidc.js";
+import { purgeAssistant } from "./ai/agent.js";
+import { runDueReports } from "./ai/reports.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -167,8 +169,12 @@ server.listen(config.port, () => {
 const purge = () => {
   purgeExpired();
   purgeOidc();
+  purgeAssistant();
 };
 purge();
 setInterval(purge, 3_600_000).unref();
+
+/* Bilans de l'Assistant : vérifiés chaque minute. */
+setInterval(() => runDueReports().catch((e) => console.error("Bilans :", e)), 60_000).unref();
 
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => server.close(() => process.exit(0)));

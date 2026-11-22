@@ -109,7 +109,7 @@ const toolChip = (x) => `<li class="ai-tool" data-ok="${x.ok === null || x.ok ==
 function messageHtml(m) {
   if (m.role === "user") {
     if (m.kind) {
-      const key = { confirmed: "aiNoteConfirmed", refused: "aiNoteRefused", failed: "aiNoteFailed" }[m.kind] ?? "aiNoteConfirmed";
+      const key = { confirmed: "aiNoteConfirmed", refused: "aiNoteRefused", failed: "aiNoteFailed", report: "aiNoteReport" }[m.kind] ?? "aiNoteConfirmed";
       return `<p class="mono ai-note" data-kind="${esc(m.kind)}">${esc(t(key))}</p>`;
     }
     return `<div class="ai-msg user"><div class="ai-bubble">${md(m.text)}</div></div>`;
@@ -485,7 +485,10 @@ async function renderSettings(main) {
             <select class="input" id="ai-hour">${HOURS.map((h) => `<option value="${h}"${h === r.hour ? " selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("")}</select>
             <span class="hint">${esc(t("aiHourHint"))}</span></div>
           ${r.lastRunAt ? `<p class="note">${esc(t("aiLastReport", relTime(r.lastRunAt)))}</p>` : ""}
-          <div class="inline-actions"><button class="btn signal" type="submit">${esc(t("save"))}</button></div>
+          <div class="inline-actions">
+            <button class="btn signal" type="submit">${esc(t("save"))}</button>
+            ${info.configured ? `<button class="btn ghost" type="button" id="ai-run-report">${esc(t("aiRunReport"))}</button>` : ""}
+          </div>
         </form>
       </div>
       <div class="section">
@@ -507,6 +510,18 @@ async function renderSettings(main) {
     try {
       await api.put(`${base}/report`, { frequency: freq.value, hour: Number($("#ai-hour", main).value), weekday: Number($("#ai-weekday", main).value) });
       toast(t("saved"));
+    } catch (ex) {
+      toast(errorText(ex.code, ex.extra), "error");
+    } finally {
+      restore();
+    }
+  });
+
+  $("#ai-run-report", main)?.addEventListener("click", async (e) => {
+    const restore = busy(e.currentTarget, "…");
+    try {
+      await api.post(`${base}/report/run`, {});
+      toast(t("aiReportStarted"));
     } catch (ex) {
       toast(errorText(ex.code, ex.extra), "error");
     } finally {

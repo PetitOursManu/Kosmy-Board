@@ -98,6 +98,20 @@ export function notifyFromClient(client, body, now = Date.now()) {
   return users.length;
 }
 
+/** Notification du Board lui-même (bilan de l'Assistant) : pas d'appli, un lien vers une page du Board. */
+export function notifyUser(userId, { title, body, url }, now = Date.now()) {
+  const t = str(title, 120);
+  if (!t) return;
+  tx(() => {
+    db.prepare("INSERT INTO notifications (user_id, client_id, app_name, app_id, title, body, url, created_at) VALUES (?, NULL, 'Kosmy Board', NULL, ?, ?, ?, ?)")
+      .run(userId, t, str(body, 1000) || null, str(url, 1000) || null, now);
+    db.prepare(
+      `DELETE FROM notifications WHERE user_id = ? AND id NOT IN
+         (SELECT id FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT ${KEEP_PER_USER})`,
+    ).run(userId, userId);
+  });
+}
+
 /* ---------- Lecture (Board et Kosmy Mobile) ---------- */
 
 const out = (r) => ({

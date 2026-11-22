@@ -61,9 +61,17 @@ function addMessage(conversationId, message, usage = null) {
   db.prepare("UPDATE ai_conversations SET updated_at = ? WHERE id = ?").run(now, conversationId);
 }
 
-export const addUserMessage = (conversationId, text) => addMessage(conversationId, { role: "user", content: text });
+export const addUserMessage = (conversationId, text, kind = null) =>
+  addMessage(conversationId, { role: "user", content: text, ...(kind ? { kb: { kind } } : {}) });
 
-export const pendingConversation = (id) => db.prepare("SELECT conversation_id FROM ai_pending WHERE id = ?").get(id)?.conversation_id ?? null;
+/** Conversations sans nouvelle depuis 90 jours, actions en attente expirées. */
+export function purgeAssistant(now = Date.now()) {
+  db.prepare("DELETE FROM ai_conversations WHERE updated_at < ?").run(now - 90 * 86_400_000);
+  db.prepare("UPDATE ai_pending SET status = 'expired' WHERE status = 'pending' AND expires_at < ?").run(now);
+  db.prepare("DELETE FROM ai_pending WHERE created_at < ?").run(now - 30 * 86_400_000);
+}
+
+export const pendingConversation =(id) => db.prepare("SELECT conversation_id FROM ai_pending WHERE id = ?").get(id)?.conversation_id ?? null;
 
 /** Le journal : les 200 dernières opérations (de la personne, ou de tout le Board). */
 export function auditEntries(userId) {
