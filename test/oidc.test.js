@@ -11,7 +11,7 @@ import { browser, startServer } from "./helpers.js";
 let srv, admin, member;
 const APP = "http://localhost:9911";
 const REDIRECT = `${APP}/auth/kosmy-board/callback`;
-let client, spaceId, adminId;
+let client, spaceId, adminId, memberId;
 
 before(async () => {
   srv = await startServer();
@@ -22,6 +22,7 @@ before(async () => {
   const inv = await admin.request("POST", "/api/invites", { role: "member" });
   const token = inv.body.url.split("/").pop();
   assert.equal((await member.request("POST", "/api/invites/accept", { token, name: "M", email: "m@x.fr", password: "motdepasse-456" })).status, 201);
+  memberId = (await member.request("GET", "/api/state")).body.user.id;
 });
 after(() => srv.stop());
 
@@ -132,16 +133,14 @@ test("sans espace relié, l'accès est refusé", async () => {
   const back = new URL(resumed.location);
   assert.equal(back.origin + back.pathname, REDIRECT);
   assert.equal(back.searchParams.get("error"), "access_denied");
-  // Le membre ajoute la même instance : il rejoint le client existant, sans voir le secret.
-  const sp = await member.request("POST", "/api/spaces", { appId: "kanby", name: "Kanby", base: APP, path: "/admin" });
-  const info = await member.request("GET", `/api/spaces/${sp.body.space.id}/sso`);
-  assert.equal(info.body.existing, true);
-  const join = await member.request("POST", `/api/spaces/${sp.body.space.id}/sso`, {});
-  assert.equal(join.status, 200);
-  assert.equal(join.body.secret, undefined);
-  assert.equal(join.body.canManage, false);
-  assert.equal(join.body.sharedWith, 2);
-  assert.equal((await member.request("POST", `/api/spaces/${sp.body.space.id}/sso/secret`)).status, 403);
+  // Un membre n'ajoute pas d'instance et ne règle pas la connexion unique : c'est l'admin qui lui donne accès.
+  assert.equal((await member.request("POST", "/api/spaces", { appId: "kanby", name: "Kanby", base: APP, path: "/admin" })).status, 403);
+  assert.equal((await member.request("GET", `/api/spaces/${spaceId}/sso`)).status, 403);
+  assert.equal((await member.request("POST", `/api/spaces/${spaceId}/sso/secret`)).status, 403);
+  assert.deepEqual((await member.request("GET", "/api/spaces")).body.spaces, []);
+  assert.equal((await admin.request("PUT", `/api/spaces/${spaceId}/access/${memberId}`, {})).status, 200);
+  assert.equal((await admin.request("GET", `/api/spaces/${spaceId}/sso`)).body.sharedWith, 2);
+  assert.equal((await member.request("GET", "/api/spaces")).body.spaces.length, 1);
   const ok = await member.follow(authUrl(client.id));
   assert.ok(ok.external);
   assert.ok(new URL(ok.location).searchParams.get("code"));
@@ -164,10 +163,8 @@ test("désactiver : le client disparaît quand plus personne ne l'utilise", asyn
   assert.equal((await admin.request("DELETE", `/api/spaces/${spaceId}/sso`)).status, 200);
   const d = await fetch(`${srv.base}/oidc/.well-known/openid-configuration`).then((r) => r.json());
   assert.ok(d.issuer);
-  // Le membre l'utilise encore : le client existe toujours.
-  assert.ok((await member.follow(authUrl(client.id))).external);
-  const ms = (await member.request("GET", "/api/spaces")).body.spaces[0];
-  assert.equal((await member.request("DELETE", `/api/spaces/${ms.id}`)).status, 200);
+  // Le client disparaît pour tout le monde : plus de connexion par le Board.
+  assert.equal((await member.request("GET", "/api/spaces")).body.spaces[0].sso, undefined);
   const gone = await member.follow(authUrl(client.id));
   assert.ok(!gone.external);
   assert.equal(gone.status, 400);

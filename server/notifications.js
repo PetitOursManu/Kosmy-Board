@@ -74,7 +74,11 @@ export function notifyFromClient(client, body, now = Date.now()) {
   if (!title) throw bad("title");
   const text = str(body.body, 1000) || null;
   const url = cleanLink(body.url, client.base);
-  let users = db.prepare("SELECT DISTINCT user_id FROM spaces WHERE client_id = ?").all(client.client_id).map((r) => r.user_id);
+  // Destinataires possibles : les personnes qui ont accès à l'instance, et les administrateurs du Board (qui les voient toutes).
+  let users = db.prepare(
+    `SELECT a.user_id FROM access a JOIN instances i ON i.id = a.instance_id WHERE i.client_id = ? AND a.revoked = 0
+     UNION SELECT id FROM users WHERE role = 'admin' AND EXISTS (SELECT 1 FROM instances WHERE client_id = ?)`,
+  ).all(client.client_id, client.client_id).map((r) => r.user_id);
   if (body.to !== undefined) {
     if (!Array.isArray(body.to) || body.to.length > 500) throw bad("to");
     const to = new Set(body.to.filter((x) => typeof x === "string"));
@@ -130,7 +134,7 @@ export const unreadCount = (userId) =>
 /** Les plus récentes d'abord ; « after » : seulement celles plus récentes que cet identifiant (Kosmy Mobile). */
 export function listNotifications(userId, { after = 0, limit = 50 } = {}) {
   const rows = db.prepare(
-    `SELECT n.*, (SELECT s.id FROM spaces s WHERE s.user_id = n.user_id AND s.client_id = n.client_id LIMIT 1) AS space_id
+    `SELECT n.*, (SELECT i.id FROM instances i WHERE i.client_id = n.client_id) AS space_id
        FROM notifications n WHERE n.user_id = ? AND n.id > ? ORDER BY n.id DESC LIMIT ?`,
   ).all(userId, after, limit);
   return { notifications: rows.map(out), unread: unreadCount(userId) };

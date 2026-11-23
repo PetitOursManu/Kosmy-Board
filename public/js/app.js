@@ -13,6 +13,7 @@ import { renderSso } from "./views/sso.js";
 import { renderAdmin } from "./views/admin.js";
 import { renderNotifications } from "./views/notifications.js";
 import { renderAssistant, renderReveal } from "./views/assistant.js";
+import { renderUsers } from "./views/users.js";
 
 /** État partagé par les vues. */
 export const state = {
@@ -21,6 +22,8 @@ export const state = {
   config: { kosmyUrl: "", catalogUrl: "", publicUrl: "" },
   catalog: null,
   spaces: null,
+  /** La personne peut ajouter, modifier et retirer des instances (administrateur du Board). */
+  canManage: false,
   /** Notifications non lues (cloche de l'en-tête). */
   unread: 0,
 };
@@ -39,8 +42,9 @@ export function go(hash) {
 /* ---------- Données ---------- */
 
 export async function refreshSpaces() {
-  const { spaces } = await api.get("api/spaces");
+  const { spaces, canManage } = await api.get("api/spaces");
   state.spaces = spaces;
+  state.canManage = Boolean(canManage);
   updateHeader();
   return spaces;
 }
@@ -74,6 +78,13 @@ function updateHeader() {
     acc.toggleAttribute("aria-current", location.hash.startsWith("#/compte"));
     if (location.hash.startsWith("#/compte")) acc.setAttribute("aria-current", "page");
   }
+
+  const users = $("#users-link");
+  users.hidden = state.user?.role !== "admin";
+  users.setAttribute("aria-label", t("usersNav"));
+  users.title = t("usersNav");
+  if (location.hash.startsWith("#/utilisateurs")) users.setAttribute("aria-current", "page");
+  else users.removeAttribute("aria-current");
 
   const ai = $("#ai-link");
   ai.hidden = !state.user;
@@ -143,6 +154,8 @@ export async function route() {
   firstRoute = false;
 
   if (parts[0] === "invitation" && parts[1]) return renderAuth(main, "invite", parts[1]);
+  // Lien d'activation (compte créé par un administrateur) ou de nouveau mot de passe : connecté ou non.
+  if (parts[0] === "activation" && parts[1]) return renderAuth(main, "password", parts[1]);
   // Connexion unique : une appli attend que l'on soit connecté au Board, puis on y retourne.
   const back = safeReturn(params.get("retour"));
   if (!state.user) return renderAuth(main, state.setupNeeded ? "setup" : "login", null, { back, app: params.get("appli") });
@@ -159,9 +172,13 @@ export async function route() {
 
   switch (parts[0]) {
     case "ajouter":
+      if (!state.canManage) return go("#/");
       return renderEdit(main, { appId: params.get("app") });
     case "modifier":
+      if (!state.canManage) return go("#/");
       return renderEdit(main, { id: parts[1] });
+    case "utilisateurs":
+      return renderUsers(main, { id: parts[1] });
     case "compte":
       return renderAccount(main);
     case "connexion-unique":

@@ -83,7 +83,7 @@ remplace l'ancien : prenez toujours le dernier des journaux.
 
 Ensuite :
 - **Compte** → activez la **double authentification** : ce compte ouvre toutes vos applis.
-- **Compte** → **Membres** → **Créer un lien d'invitation** pour ajouter d'autres personnes (le lien est valable 7 jours, à usage unique).
+- **Utilisateurs** (icône de l'en-tête) → **Créer un compte** pour ajouter d'autres personnes (lien d'activation valable 7 jours, à usage unique), puis leur donner accès aux instances.
 
 ## 6. Relier les applis
 

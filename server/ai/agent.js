@@ -141,7 +141,7 @@ function createPending(ctx, info, callId) {
 /* ---------- Le prompt système ---------- */
 
 function systemPrompt(user, lang, mode) {
-  const spaces = listSpaceRows(user.id).slice(0, 60)
+  const spaces = listSpaceRows(user).slice(0, 60)
     .map((s) => `- ${s.name} (id ${s.id}${s.app_id ? `, app ${s.app_id}` : ""}, ${s.base}${s.client_id ? "" : ", single sign-on off: no admin from the Board"})`)
     .join("\n") || "- (none yet)";
   const language = lang === "en" ? "English" : "French";

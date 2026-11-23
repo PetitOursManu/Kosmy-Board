@@ -13,10 +13,14 @@ import { clientFromBasic, deleteNotifications, listNotifications, markRead, noti
 import { createMcpToken, deleteMcpToken, listMcpTokens } from "./mcp.js";
 import { ISSUER, listMcpGrants, revokeMcpGrant } from "./oidc.js";
 import {
-  appCall, cleanSpace, createInvite, createSpace, deleteInvite, deleteSpace, disableSso, enableSso, getSso,
-  listMembers, listSpaceRows, MAX_SPACES, newSpaceId, removeMember, rotateSsoSecret, sectionId, spaceForAdmin, spaceOut,
+  appCall, cleanSpace, createInvite, createSpace, deleteInvite, deleteSpace, disableSso, enableSso, getSso, isBoardAdmin,
+  listMembers, listSpaceRows, markOpened, MAX_SPACES, newSpaceId, rotateSsoSecret, sectionId, spaceForAdmin, spaceOut,
   updateSpace, updateSso,
 } from "./spaces.js";
+import {
+  acceptPasswordLink, appSchema, checkPasswordLink, createUser, instanceAccessList, passwordLink, removeUser, resyncAccess,
+  revokeAccess, setAccess, syncUserEverywhere, updateUser, userDetail,
+} from "./access.js";
 import { newRecoveryCodes, newTotpSecret, normalizeRecovery, otpauthUri, verifyTotp } from "./totp.js";
 import {
   addUserMessage, auditEntries, checkRate, conversationOut, createConversation, decidePending, deleteConversation, getConversation,
@@ -197,7 +201,13 @@ route("POST", /^\/api\/logout$/, (req, res) => {
 route("PATCH", /^\/api\/me$/, async (req, res, user) => {
   const body = await readJson(req);
   if ("lang" in body) db.prepare("UPDATE users SET lang = ? WHERE id = ?").run(cleanLang(body.lang), user.id);
-  if ("name" in body) db.prepare("UPDATE users SET name = ? WHERE id = ?").run(cleanName(body.name), user.id);
+  if ("name" in body) {
+    const name = cleanName(body.name);
+    if (name !== user.name) {
+      db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, user.id);
+      syncUserEverywhere(user.id, user.lang ?? "fr");
+    }
+  }
   send(res, 200, { user: userOut(db.prepare("SELECT * FROM users WHERE id = ?").get(user.id)) });
 });
 
@@ -224,9 +234,10 @@ route("POST", /^\/api\/password$/, async (req, res, user) => {
 /* ---------- Espaces ---------- */
 
 route("GET", /^\/api\/spaces$/, (req, res, user) => {
-  send(res, 200, { spaces: listSpaceRows(user.id).map((r) => spaceOut(r)) });
+  send(res, 200, { spaces: listSpaceRows(user).map((r) => spaceOut(r)), canManage: isBoardAdmin(user) });
 });
 
+/* Ajouter, modifier ou retirer une instance : administrateurs du Board seulement (les instances sont communes). */
 route("POST", /^\/api\/spaces$/, async (req, res, user) => {
   send(res, 201, { space: spaceOut(createSpace(user, await readJson(req))) });
 });
@@ -241,34 +252,38 @@ route("DELETE", /^\/api\/spaces\/([\w-]{1,40})$/, (req, res, user, [id]) => {
 });
 
 route("POST", /^\/api\/spaces\/([\w-]{1,40})\/opened$/, (req, res, user, [id]) => {
-  const now = Date.now();
-  const r = db.prepare("UPDATE spaces SET opened_at = ? WHERE user_id = ? AND id = ?").run(now, user.id, id);
-  if (!r.changes) throw new HttpError(404, "not_found");
-  send(res, 200, { openedAt: now });
+  send(res, 200, { openedAt: markOpened(user, id) });
 });
 
 /* Export : un tableau d'AdminSpace, le même format que Kosmy Mobile, avec un en-tête pour le reconnaître. */
 route("GET", /^\/api\/spaces\/export$/, (req, res, user) => {
-  const rows = db.prepare("SELECT * FROM spaces WHERE user_id = ? ORDER BY added_at").all(user.id);
+  const rows = listSpaceRows(user).sort((a, b) => a.added_at - b.added_at);
   const date = new Date().toISOString().slice(0, 10);
   send(res, 200, { format: "kosmy.admin.v1", exportedAt: new Date().toISOString(), spaces: rows.map((r) => spaceOut(r, false)) }, {
     "Content-Disposition": `attachment; filename="kosmy-board-${date}.json"`,
   });
 });
 
-/* Import : accepte l'export du Board ou un simple tableau d'AdminSpace (Kosmy Mobile). Les doublons sont ignorés. */
+/*
+ * Import : accepte l'export du Board ou un simple tableau d'AdminSpace (Kosmy Mobile). Les doublons sont ignorés.
+ * Seul un administrateur du Board ajoute des instances : pour les autres, tout est ignoré (Kosmy Mobile envoie
+ * ses espaces à la première connexion, puis reprend la liste du Board).
+ */
 route("POST", /^\/api\/spaces\/import$/, async (req, res, user) => {
   const body = await readJson(req, 2_000_000);
   const list = Array.isArray(body) ? body : Array.isArray(body.spaces) ? body.spaces : null;
   if (!list) throw bad("import_format");
+  if (!isBoardAdmin(user)) {
+    send(res, 200, { added: 0, skipped: Math.min(list.length, MAX_SPACES), invalid: 0 });
+    return;
+  }
   let added = 0, skipped = 0, invalid = 0;
   tx(() => {
-    const existing = db.prepare("SELECT id, base, path FROM spaces WHERE user_id = ?").all(user.id);
+    const existing = db.prepare("SELECT id, base FROM instances").all();
     const ids = new Set(existing.map((s) => s.id));
-    const urls = new Set(existing.map((s) => `${s.base}${s.path}`));
-    const insert = db.prepare(
-      "INSERT INTO spaces (user_id, id, app_id, name, base, path, added_at, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    );
+    const bases = new Set(existing.map((s) => s.base));
+    const insert = db.prepare("INSERT INTO instances (id, app_id, name, base, path, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    const opened = db.prepare("INSERT INTO opened (user_id, instance_id, at) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET at = excluded.at");
     for (const raw of list.slice(0, MAX_SPACES)) {
       let s;
       try {
@@ -277,7 +292,7 @@ route("POST", /^\/api\/spaces\/import$/, async (req, res, user) => {
         invalid++;
         continue;
       }
-      if (urls.has(`${s.base}${s.path}`)) {
+      if (bases.has(s.base)) {
         skipped++;
         continue;
       }
@@ -285,9 +300,10 @@ route("POST", /^\/api\/spaces\/import$/, async (req, res, user) => {
       let id = typeof raw.id === "string" && /^[\w-]{1,40}$/.test(raw.id) ? raw.id : newSpaceId();
       while (ids.has(id)) id = newSpaceId();
       const num = (v) => (Number.isFinite(v) && v > 0 && v < 1e13 ? Math.round(v) : null);
-      insert.run(user.id, id, s.appId, s.name, s.base, s.path, num(raw.addedAt) ?? Date.now(), num(raw.openedAt));
+      insert.run(id, s.appId, s.name, s.base, s.path, user.id, num(raw.addedAt) ?? Date.now());
+      if (num(raw.openedAt)) opened.run(user.id, id, num(raw.openedAt));
       ids.add(id);
-      urls.add(`${s.base}${s.path}`);
+      bases.add(s.base);
       added++;
     }
   });
@@ -311,10 +327,80 @@ route("DELETE", /^\/api\/invites\/([\w-]{1,40})$/, (req, res, user, [id]) => {
   send(res, 200, { ok: true });
 }, { admin: true });
 
-route("DELETE", /^\/api\/users\/([\w-]{1,40})$/, (req, res, user, [id]) => {
-  removeMember(user, id);
-  send(res, 200, { ok: true });
+/* ---------- Utilisateurs gérés par le Board (docs/users-api.md) ---------- */
+
+/** Langue de l'interface (?lang=), sinon celle du compte. */
+function uiLang(req, user) {
+  const q = new URL(req.url, "http://board").searchParams.get("lang");
+  return cleanLang(q) ?? user.lang ?? "fr";
+}
+
+/* Créer un compte : la personne choisit son mot de passe par le lien renvoyé (montré une seule fois). */
+route("POST", /^\/api\/users$/, async (req, res, user) => {
+  send(res, 201, createUser(user, await readJson(req)));
 }, { admin: true });
+
+route("GET", /^\/api\/users\/([\w-]{1,40})$/, (req, res, user, [id]) => {
+  send(res, 200, userDetail(user, id));
+}, { admin: true });
+
+route("PATCH", /^\/api\/users\/([\w-]{1,40})$/, async (req, res, user, [id]) => {
+  send(res, 200, updateUser(user, id, await readJson(req)));
+}, { admin: true });
+
+/* Supprimer : ses comptes gérés dans les applis sont d'abord désactivés ; les applis injoignables sont signalées. */
+route("DELETE", /^\/api\/users\/([\w-]{1,40})$/, async (req, res, user, [id]) => {
+  send(res, 200, await removeUser(user, id, uiLang(req, user)));
+}, { admin: true });
+
+/* Lien pour choisir un nouveau mot de passe (montré une seule fois ; l'ancien lien ne vaut plus). */
+route("POST", /^\/api\/users\/([\w-]{1,40})\/password-link$/, (req, res, user, [id]) => {
+  send(res, 201, passwordLink(user, id));
+}, { admin: true });
+
+/* Ce que l'appli de l'instance propose : rôles, restrictions, comptes reliés. */
+route("GET", /^\/api\/spaces\/([\w-]{1,40})\/roles$/, async (req, res, user, [id]) => {
+  send(res, 200, await appSchema(user, id, uiLang(req, user)));
+}, { admin: true });
+
+route("GET", /^\/api\/spaces\/([\w-]{1,40})\/access$/, (req, res, user, [id]) => {
+  send(res, 200, { access: instanceAccessList(id) });
+}, { admin: true });
+
+/* Donner ou changer l'accès d'une personne : { role, values } (role vide : accès sans compte géré). */
+route("PUT", /^\/api\/spaces\/([\w-]{1,40})\/access\/([\w-]{1,40})$/, async (req, res, user, [id, uid]) => {
+  send(res, 200, await setAccess(user, id, uid, await readJson(req, 200_000), uiLang(req, user)));
+}, { admin: true });
+
+route("DELETE", /^\/api\/spaces\/([\w-]{1,40})\/access\/([\w-]{1,40})$/, async (req, res, user, [id, uid]) => {
+  send(res, 200, await revokeAccess(user, id, uid, uiLang(req, user)));
+}, { admin: true });
+
+route("POST", /^\/api\/spaces\/([\w-]{1,40})\/access\/([\w-]{1,40})\/sync$/, async (req, res, user, [id, uid]) => {
+  send(res, 200, await resyncAccess(user, id, uid, uiLang(req, user)));
+}, { admin: true });
+
+/* Lien d'activation ou de nouveau mot de passe : sans être connecté. */
+route("POST", /^\/api\/password-links\/check$/, async (req, res) => {
+  const body = await readJson(req);
+  send(res, 200, checkPasswordLink(body.token));
+}, { auth: false });
+
+route("POST", /^\/api\/password-links\/accept$/, async (req, res) => {
+  const body = await readJson(req);
+  const ip = clientIp(req);
+  const wait = lockedFor([`link:${ip}`]);
+  if (wait) throw new HttpError(429, "locked", { wait });
+  let id;
+  try {
+    id = await acceptPasswordLink(body.token, body.password);
+  } catch (e) {
+    if (e instanceof HttpError && e.code === "link_invalid") recordFailure([`link:${ip}`]);
+    throw e;
+  }
+  createSession(res, id);
+  send(res, 200, { ok: true });
+}, { auth: false });
 
 const findInvite = (raw) =>
   typeof raw === "string" && raw.length < 100

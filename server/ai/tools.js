@@ -2,7 +2,8 @@
  * Les outils de l'Assistant, communs au chat du Board, au serveur MCP et aux bilans planifiés.
  *
  * Chaque outil agit au nom de la personne (ctx.user) avec les règles des routes /api (server/spaces.js) :
- * elle ne voit que ses espaces, et chaque appli revérifie ses droits (jeton kb-admin+jwt).
+ * elle ne voit que les instances auxquelles elle a accès (toutes pour un administrateur du Board),
+ * et chaque appli revérifie ses droits (jeton kb-admin+jwt).
  *
  * Garde-fous (voir docs/assistant.md) :
  * - une action d'appli marquée « danger » ou « confirm », et les opérations du Board qui suppriment ou coupent
@@ -20,8 +21,9 @@ import { db } from "../db.js";
 import { HttpError } from "../http.js";
 import {
   appCall, createInvite, createSpace, deleteSpace, disableSso, enableSso, getSpace, getSso, kosmyDefaults, listMembers,
-  listSpaceRows, removeMember, rotateSsoSecret, sectionId, spaceForAdmin, updateSpace,
+  listSpaceRows, rotateSsoSecret, sectionId, spaceForAdmin, updateSpace,
 } from "../spaces.js";
+import { appSchema, createUser, instanceAccessList, removeUser, revokeAccess, setAccess, userAccessList } from "../access.js";
 
 /* ---------- Petits outils ---------- */
 
@@ -75,22 +77,38 @@ export function errorMessage(e) {
       admin_invalid: "the app sent an invalid answer",
       sso_enabled: "single sign-on is already enabled",
       sso_disabled: "single sign-on is not enabled",
-      sso_manage: "only a Board administrator or the person who enabled it can change this",
+      sso_manage: "only a Board administrator can change this",
       self: "you cannot do this to your own account",
       too_many: "too many spaces",
+      admin: "Board administrators only",
+      space_exists: "an instance with this address is already in the Board",
+      access_no_sso: "single sign-on is not enabled for this instance, so its accounts cannot be managed from the Board",
+      users_unsupported: "this app does not let the Board manage its accounts (protocol kosmy.board-users.v1); give access without a role",
+      users_invalid: "the app sent an invalid list of roles",
+      access_role: "unknown role for this app: call get_app_roles",
+      access_values: "a restriction value is not valid: call get_app_roles",
+      email_taken: "this e-mail address is already used by a Board account",
     };
     return `${known[e.code] ?? e.code}${app}`;
   }
   return "unexpected error";
 }
 
+/** Retrouve un membre du Board par son identifiant ou son e-mail. */
+function resolveMember(ref) {
+  const r = String(ref ?? "").trim().toLowerCase();
+  const m = listMembers().users.find((u) => u.id === ref || u.email.toLowerCase() === r);
+  if (!m) throw new ToolError("unknown member. Call list_members.");
+  return m;
+}
+
 /** Retrouve un espace de la personne par son identifiant ou son nom (sans tenir compte de la casse). */
 function resolveSpace(user, ref) {
   const r = String(ref ?? "").trim();
   if (!r) throw new ToolError("missing 'space'");
-  const byId = getSpace(user.id, r);
+  const byId = getSpace(user, r);
   if (byId) return byId;
-  const rows = listSpaceRows(user.id);
+  const rows = listSpaceRows(user);
   const lower = r.toLowerCase();
   const exact = rows.filter((s) => s.name.toLowerCase() === lower);
   const found = exact.length ? exact : rows.filter((s) => s.name.toLowerCase().includes(lower) || s.base.toLowerCase().includes(lower));
@@ -102,6 +120,7 @@ function resolveSpace(user, ref) {
 const spaceBrief = (s) => ({
   id: s.id, name: s.name, app: s.app_id ? CATALOG.get(s.app_id)?.name ?? s.app_id : null, url: s.base, adminPath: s.path,
   singleSignOn: Boolean(s.client_id), boardAdmin: Boolean(s.client_id),
+  ...(s.access_role ? { yourRole: s.access_label || s.access_role } : {}),
 });
 
 /* ---------- Sections : forme compacte pour le modèle ---------- */
@@ -324,7 +343,7 @@ export const TOOLS = [
     description: "List the person's spaces in Kosmy Board: each self-hosted app instance, its address, and whether single sign-on (and so the admin from the Board) is enabled.",
     parameters: S({}),
     readOnly: true,
-    run: (ctx) => ({ spaces: listSpaceRows(ctx.user.id).map(spaceBrief) }),
+    run: (ctx) => ({ spaces: listSpaceRows(ctx.user).map(spaceBrief) }),
   },
   {
     name: "check_status",
@@ -332,7 +351,7 @@ export const TOOLS = [
     parameters: S({ spaces: { type: "array", items: { type: "string" }, description: "Space ids or names (optional)." } }),
     readOnly: true,
     run: async (ctx, args) => {
-      const rows = Array.isArray(args.spaces) && args.spaces.length ? args.spaces.map((r) => resolveSpace(ctx.user, r)) : listSpaceRows(ctx.user.id);
+      const rows = Array.isArray(args.spaces) && args.spaces.length ? args.spaces.map((r) => resolveSpace(ctx.user, r)) : listSpaceRows(ctx.user);
       const results = await pool(rows, 6, async (s) => {
         const t0 = Date.now();
         try {
@@ -352,7 +371,7 @@ export const TOOLS = [
     parameters: S({}),
     readOnly: true,
     run: async (ctx) => {
-      const rows = listSpaceRows(ctx.user.id);
+      const rows = listSpaceRows(ctx.user);
       const instances = await pool(rows, 4, async (s) => {
         if (!s.client_id) return { space: s.name, id: s.id, boardAdmin: false, note: "single sign-on off: no admin from the Board" };
         try {
@@ -424,7 +443,8 @@ export const TOOLS = [
   /* ----- Gestion du Board ----- */
   {
     name: "add_space",
-    description: "Add a space (an app instance) to the person's Board. For a Kosmy app, give appId (calendy, cleardoc, crafty, dashy, kanby, lumy, mocky, soundy…): its admin path is filled in.",
+    admin: true,
+    description: "Add an instance to the Board (shared: Board administrators see it, others only once given access). For a Kosmy app, give appId (calendy, cleardoc, crafty, dashy, kanby, lumy, mocky, soundy…): its admin path is filled in.",
     parameters: S({
       name: { type: "string" },
       url: { type: "string", description: "Instance address, e.g. https://kanby.example.com" },
@@ -439,6 +459,7 @@ export const TOOLS = [
   },
   {
     name: "update_space",
+    admin: true,
     description: "Rename a space or change its address or admin path. Changing the address turns its single sign-on off.",
     parameters: S({ space: SPACE, name: { type: "string" }, url: { type: "string" }, adminPath: { type: "string" } }, ["space"]),
     run: (ctx, args) => {
@@ -453,8 +474,9 @@ export const TOOLS = [
   },
   {
     name: "delete_space",
+    admin: true,
     dangerous: true,
-    description: "Remove a space from the person's Board (the instance itself is not touched). Needs the person's confirmation.",
+    description: "Remove an instance from the Board, for everyone (the instance itself and its accounts are not touched). Needs the person's confirmation.",
     parameters: S({ space: SPACE }, ["space"]),
     run: async (ctx, args) => {
       const s = resolveSpace(ctx.user, args.space);
@@ -468,6 +490,7 @@ export const TOOLS = [
   },
   {
     name: "get_sso",
+    admin: true,
     description: "Single sign-on settings of a space: whether it is enabled, the issuer and client id to set in the app, redirect addresses.",
     parameters: S({ space: SPACE }, ["space"]),
     readOnly: true,
@@ -480,6 +503,7 @@ export const TOOLS = [
   },
   {
     name: "enable_sso",
+    admin: true,
     description: "Enable single sign-on for a space (needed for the admin from the Board). For a Kosmy app the addresses are filled in. The client secret is shown to the person, who pastes the settings into the app.",
     parameters: S({
       space: SPACE,
@@ -501,6 +525,7 @@ export const TOOLS = [
   },
   {
     name: "disable_sso",
+    admin: true,
     dangerous: true,
     description: "Turn single sign-on off for a space (the admin from the Board stops working for it). Needs the person's confirmation.",
     parameters: S({ space: SPACE }, ["space"]),
@@ -516,6 +541,7 @@ export const TOOLS = [
   },
   {
     name: "rotate_sso_secret",
+    admin: true,
     dangerous: true,
     description: "Generate a new single sign-on client secret for an instance: the old one stops working at once, until the new one is pasted into the app. Needs the person's confirmation.",
     parameters: S({ space: SPACE }, ["space"]),
@@ -553,7 +579,7 @@ export const TOOLS = [
     name: "remove_member",
     admin: true,
     dangerous: true,
-    description: "Delete a member's Board account (their spaces and sessions go with it). Needs the person's confirmation.",
+    description: "Delete a member's Board account. Their accounts managed by the Board in the apps are deactivated first. Needs the person's confirmation.",
     parameters: S({ member: { type: "string", description: "Member id or e-mail, from list_members." } }, ["member"]),
     run: async (ctx, args) => {
       const ref = String(args.member ?? "").trim().toLowerCase();
@@ -562,9 +588,100 @@ export const TOOLS = [
       if (m.id === ctx.user.id) throw new ToolError("you cannot remove your own account.");
       const stop = await gate(ctx, { tool: "remove_member", args: { member: m.id }, title: `Delete the Board account of ${m.name} (${m.email})`, danger: true, board: true });
       if (stop) return stop;
-      return logged(ctx, "remove_member", null, { member: m.email }, () => {
-        removeMember(ctx.user, m.id);
-        return { ok: true, message: `Account deleted: ${m.email}` };
+      return logged(ctx, "remove_member", null, { member: m.email }, async () => {
+        const r = await removeUser(ctx.user, m.id, ctx.lang);
+        return {
+          ok: true, message: `Account deleted: ${m.email}`,
+          ...(r.warnings.length ? { notDeactivatedIn: r.warnings.map((w) => `${w.space}: ${errorMessage(new HttpError(502, w.code, w.message ? { message: w.message } : undefined))}`) } : {}),
+        };
+      });
+    },
+  },
+
+  {
+    name: "create_member",
+    admin: true,
+    description: "Create a Board account for someone (name, e-mail, Board role). An activation link to choose their password is shown to the person (not to you), who sends it. Then give access to instances with set_user_access.",
+    parameters: S({
+      name: { type: "string" },
+      email: { type: "string" },
+      role: { type: "string", enum: ["member", "admin"], description: "Board role. Board administrators see and manage every instance." },
+    }, ["name", "email"]),
+    run: (ctx, args) => logged(ctx, "create_member", null, { email: args.email, role: args.role }, () => {
+      const r = createUser(ctx.user, args);
+      ctx.reveal({ label: `Activation link for ${r.user.email}`, value: r.link.url });
+      return { ok: true, message: `Account created: ${r.user.email}; the activation link was shown to the person (not to you).`, member: { id: r.user.id, email: r.user.email } };
+    }),
+  },
+  {
+    name: "get_user_access",
+    admin: true,
+    description: "Which instances a Board member can access, with their role and restrictions in each app, and whether the app is in sync.",
+    parameters: S({ member: { type: "string", description: "Member id or e-mail, from list_members." } }, ["member"]),
+    readOnly: true,
+    run: (ctx, args) => {
+      const m = resolveMember(args.member);
+      return {
+        member: { id: m.id, name: m.name, email: m.email, boardRole: m.role },
+        instances: userAccessList(m.id).map(({ space, access }) => ({
+          space: space.name, id: space.id, singleSignOn: space.sso,
+          access: access ? (access.revoked ? "removal pending" : access.managed ? { role: access.role, roleLabel: access.label, values: access.values, sync: access.sync?.status ?? null } : "access without a managed account") : "no access",
+        })),
+      };
+    },
+  },
+  {
+    name: "get_app_roles",
+    admin: true,
+    description: "The roles and restrictions an instance's app offers for accounts managed by the Board, and who has access to it.",
+    parameters: S({ space: SPACE }, ["space"]),
+    readOnly: true,
+    run: async (ctx, args) => {
+      const s = resolveSpace(ctx.user, args.space);
+      const schema = await appSchema(ctx.user, s.id, ctx.lang);
+      return {
+        space: s.name,
+        roles: schema.roles,
+        defaultRole: schema.defaultRole,
+        restrictions: schema.fields.map((f) => ({ ...fieldBrief(f), ...(f.roles ? { onlyForRoles: f.roles } : {}) })),
+        access: instanceAccessList(s.id).map(({ user, access }) => ({ member: user.email, role: access.role ?? null, values: access.values, revoked: access.revoked })),
+      };
+    },
+  },
+  {
+    name: "set_user_access",
+    admin: true,
+    description: "Give a member access to an instance, or change their role and restrictions there. The Board creates or updates their account in the app. Without 'role', the member sees the instance but no account is managed. Call get_app_roles first for the roles and restriction names.",
+    parameters: S({
+      member: { type: "string", description: "Member id or e-mail." },
+      space: SPACE,
+      role: { type: "string", description: "A role value from get_app_roles (optional)." },
+      values: { type: "object", description: "Restrictions to change: { name: value }. The others keep their value.", additionalProperties: true },
+    }, ["member", "space"]),
+    run: (ctx, args) => {
+      const m = resolveMember(args.member);
+      const s = resolveSpace(ctx.user, args.space);
+      return logged(ctx, "set_user_access", s, { member: m.email, role: args.role ?? null }, async () => {
+        const r = await setAccess(ctx.user, s.id, m.id, { role: args.role ?? null, values: args.values }, ctx.lang);
+        const sync = r.sync && !r.sync.ok ? ` The app could not be updated yet (${errorMessage(new HttpError(502, r.sync.code, r.sync.message ? { message: r.sync.message } : undefined))}); it will apply at their next sign-in, or retry later.` : "";
+        return { ok: true, message: `Access saved for ${m.email} on ${s.name}.${sync}`, access: r.access };
+      });
+    },
+  },
+  {
+    name: "revoke_user_access",
+    admin: true,
+    dangerous: true,
+    description: "Remove a member's access to an instance: it leaves their Board, they cannot sign in to it through the Board, and their managed account in the app is deactivated (data kept). Needs the person's confirmation.",
+    parameters: S({ member: { type: "string" }, space: SPACE }, ["member", "space"]),
+    run: async (ctx, args) => {
+      const m = resolveMember(args.member);
+      const s = resolveSpace(ctx.user, args.space);
+      const stop = await gate(ctx, { tool: "revoke_user_access", args: { member: m.id, space: s.id }, title: `Remove ${m.name} (${m.email})'s access`, space: s.name, danger: true, board: true });
+      if (stop) return stop;
+      return logged(ctx, "revoke_user_access", s, { member: m.email }, async () => {
+        const r = await revokeAccess(ctx.user, s.id, m.id, ctx.lang);
+        return { ok: true, message: r.removed ? `Access removed for ${m.email}.` : `Access removed from the Board for ${m.email}; the app could not be reached to deactivate the account yet (retry from the Board).` };
       });
     },
   },

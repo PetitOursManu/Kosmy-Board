@@ -15,7 +15,8 @@ et actions, et l'Assistant s'en sert sans rien connaître de l'appli à l'avance
 | --- | --- |
 | Vue d'ensemble | `list_spaces`, `check_status` (instances joignables, testé depuis le serveur), `fleet_overview` (version, rôle, alertes et chiffres de chaque instance) |
 | Admin des instances | `get_admin_summary`, `get_admin_section`, `run_admin_action` (formulaire, action de ligne, bouton) |
-| Gestion du Board | `add_space`, `update_space`, `delete_space`, `get_sso`, `enable_sso`, `disable_sso`, `rotate_sso_secret` ; pour les administrateurs du Board : `list_members`, `invite_member`, `remove_member` |
+| Gestion du Board (administrateurs du Board) | `add_space`, `update_space`, `delete_space`, `get_sso`, `enable_sso`, `disable_sso`, `rotate_sso_secret`, `list_members`, `invite_member`, `create_member`, `remove_member` |
+| Utilisateurs et accès (administrateurs du Board) | `get_user_access`, `get_app_roles`, `set_user_access`, `revoke_user_access` (à confirmer) — voir [users-api.md](users-api.md) |
 | Bilans | `get_report_settings`, `set_report_settings` |
 
 ## Garde-fous

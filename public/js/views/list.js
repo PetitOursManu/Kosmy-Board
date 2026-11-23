@@ -17,6 +17,11 @@ const homeUrl = (s) => `${s.base}/`;
 /** Une page d'admin distincte de l'accueil : sinon le bouton « Admin » ferait doublon avec « Ouvrir ». */
 const hasAdminPage = (s) => s.path !== "/" && s.path !== "";
 /**
+ * « Admin » : pour un administrateur du Board, et pour une personne dont le rôle dans l'appli est un rôle
+ * d'administration (ou dont le compte n'est pas géré par le Board : c'est alors l'appli seule qui décide).
+ */
+const mayAdmin = (s) => state.canManage || !s.access || s.access.admin;
+/**
  * Adresse ouverte par un clic sur la ligne (ou « Ouvrir ») : l'accueil de l'appli ; par « Admin » : sa page d'admin.
  * Avec la connexion unique et une adresse de lancement, l'appli démarre elle-même la connexion avec le Board
  * (OpenID Connect, connexion initiée par un tiers), puis arrive sur la page demandée.
@@ -59,21 +64,28 @@ function rowHtml(s, i, animate) {
       ${logoTile(app, s.name)}
       <span class="title">
         <span class="name serif">${esc(s.name)}</span>
-        <span class="host mono"><span>${esc(host)}${s.path !== "/" ? esc(s.path) : ""}</span>${isCleartext(s.base) ? `<span class="tag-warn${isLocalHost(host) ? " local" : ""}" title="${esc(t(isLocalHost(host) ? "cleartextLocal" : "cleartextWarning"))}">${esc(t("cleartext"))}</span>` : ""}${s.sso ? `<span class="tag-sso">${esc(t("ssoTag"))}</span>` : ""}</span>
+        <span class="host mono"><span>${esc(host)}${s.path !== "/" ? esc(s.path) : ""}</span>${isCleartext(s.base) ? `<span class="tag-warn${isLocalHost(host) ? " local" : ""}" title="${esc(t(isLocalHost(host) ? "cleartextLocal" : "cleartextWarning"))}">${esc(t("cleartext"))}</span>` : ""}${s.sso && state.canManage ? `<span class="tag-sso">${esc(t("ssoTag"))}</span>` : ""}${s.access ? `<span class="tag-role">${esc(s.access.label)}</span>` : ""}</span>
       </span>
       <span class="meta-r mono"><span class="opened">${esc(opened)}</span><span>${esc(themeName ?? "")}</span></span>
       <span class="actions mono">
         <a class="open-btn" href="${esc(open)}" target="${target}" rel="noopener noreferrer" aria-label="${esc(t("openLabel", s.name, host))}">${esc(t("open"))} <span class="arrow" aria-hidden="true">↗</span></a>
-        ${s.sso
+        ${!mayAdmin(s) ? "" : s.sso
           ? `<a class="open-btn alt" href="#/admin/${encodeURIComponent(s.id)}" aria-label="${esc(t("adminBoardLabel", s.name, host))}">${esc(t("admin"))}</a>`
           : hasAdminPage(s) ? `<a class="open-btn alt" href="${esc(openUrl(s, true))}" target="${windowName(s, true)}" rel="noopener noreferrer" data-admin aria-label="${esc(t("adminLabel", s.name, host))}">${esc(t("admin"))}</a>` : ""}
-        <a class="text-btn" href="#/modifier/${encodeURIComponent(s.id)}" aria-label="${esc(`${t("edit")} ${s.name}`)}">${esc(t("edit"))}</a>
-        <button class="text-btn danger" type="button" data-remove aria-label="${esc(`${t("remove")} ${s.name}`)}">${esc(t("remove"))}</button>
+        ${state.canManage ? `<a class="text-btn" href="#/modifier/${encodeURIComponent(s.id)}" aria-label="${esc(`${t("edit")} ${s.name}`)}">${esc(t("edit"))}</a>
+        <button class="text-btn danger" type="button" data-remove aria-label="${esc(`${t("remove")} ${s.name}`)}">${esc(t("remove"))}</button>` : ""}
       </span>
     </article>`;
 }
 
 function emptyHtml() {
+  if (!state.canManage) {
+    return `
+    <div class="empty fade" style="--d:.3s">
+      <p class="mono">${esc(t("emptyTitle"))}</p>
+      <p>${esc(t("emptyMemberText"))}</p>
+    </div>`;
+  }
   const apps = (state.catalog?.apps ?? []).filter((a) => a.admin);
   return `
     <div class="empty fade" style="--d:.3s">
@@ -254,8 +266,11 @@ export function renderList(main, { rerender = false } = {}) {
           <h1 class="serif page-title">${titleHtml(t("listTitle"))}</h1>
         </div>
         <div class="head-side fade" style="--d:.35s">
-          <p class="lead">${esc(t("listText"))}</p>
-          <a class="btn signal" href="#/ajouter"><span class="plus" aria-hidden="true">+</span> ${esc(t("add"))}</a>
+          <p class="lead">${esc(t(state.canManage ? "listText" : "listTextMember"))}</p>
+          ${state.canManage ? `<div class="inline-actions" style="margin-top:0">
+            <a class="btn signal" href="#/ajouter"><span class="plus" aria-hidden="true">+</span> ${esc(t("add"))}</a>
+            <a class="btn ghost" href="#/utilisateurs">${esc(t("usersNav"))}</a>
+          </div>` : ""}
         </div>
       </div>
       ${spaces.length ? `

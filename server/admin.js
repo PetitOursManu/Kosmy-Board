@@ -18,7 +18,7 @@ export const ADMIN_PATH = "/api/kosmy-board/admin";
 export const TOKEN_TYPE = "kb-admin+jwt";
 const TOKEN_TTL = 60;
 /* Lecture : 15 secondes. Action : 30 secondes (un test de connexion de l'appli peut être long). */
-const TIMEOUT = { GET: 15_000, POST: 30_000 };
+const TIMEOUT = { GET: 15_000, POST: 30_000, PUT: 30_000, DELETE: 30_000 };
 const MAX_BYTES = 2_000_000;
 
 export const SECTION_ID = /^[a-z0-9-]{1,40}$/;
@@ -72,8 +72,8 @@ const appMessage = (data) => {
  * Appelle l'API d'admin de l'instance. `section` vide : le sommaire.
  * Renvoie le JSON de l'appli, ou lance une HttpError avec un code compris par l'interface.
  */
-export async function callApp({ base, clientId, user, lang, method = "GET", section = "", body }) {
-  const url = `${base}${ADMIN_PATH}${section ? `/${section}` : ""}`;
+export async function callApp({ base, clientId, user, lang, method = "GET", section = "", body, path = ADMIN_PATH }) {
+  const url = `${base}${path}${section ? `/${section}` : ""}`;
   const token = await adminToken({ user, clientId, method, url });
   let res;
   try {
@@ -153,7 +153,7 @@ function sameOriginHref(v, base) {
 
 const FIELD_TYPES = new Set(["text", "textarea", "email", "url", "number", "password", "select", "checkbox"]);
 
-function field(f) {
+export function cleanField(f) {
   if (!f || typeof f !== "object") return null;
   const name = id(f.name);
   const label = text(f.label, 120);
@@ -185,7 +185,7 @@ function field(f) {
   }
   return out;
 }
-const fields = (v) => list(v, 60).map(field).filter(Boolean);
+const fields = (v) => list(v, 60).map(cleanField).filter(Boolean);
 
 function action(a) {
   if (!a || typeof a !== "object") return null;

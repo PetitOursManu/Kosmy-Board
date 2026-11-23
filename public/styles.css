@@ -683,3 +683,26 @@ textarea.ai-input { font-family: inherit; resize: vertical; min-height: 52px; ma
 .ai-compose.compact { position: static; background: none; padding-top: 0; }
 .ai-compose.compact textarea.ai-input { min-height: 46px; font-size: 16px; }
 .ai-chat-box.compact .ai-suggest .chip { font-size: 12px; }
+
+/* ---------- Utilisateurs gérés par le Board ---------- */
+.tag-role { flex: none; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 999px; padding: 0 8px; font-size: 10px; font-family: "JetBrains Mono", ui-monospace, monospace; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.acc-list { display: grid; gap: 12px; margin-top: 8px; }
+.acc-card { border: 1px solid var(--line); border-radius: 20px; padding: 14px 16px; background: none; transition: border-color .3s, background .3s; }
+.acc-card.on { border-color: var(--line-strong); background: var(--panel); }
+.acc-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; }
+.acc-head .logo-tile, .acc-head .tile { width: 40px; height: 40px; }
+.acc-title { min-width: 0; display: grid; }
+.acc-title .serif { font-size: 22px; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-title .mono { font-size: 10px; color: var(--mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-head .check { position: relative; display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+.acc-head .check .mono { font-size: 10px; color: var(--text-2); }
+.acc-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; padding-left: 54px; }
+.acc-status .tag-warn { cursor: help; }
+.acc-note { font-size: 10px; color: var(--mute); }
+.acc-body { margin-top: 4px; padding-left: 54px; }
+.acc-body > .hint { display: block; margin-top: 12px; }
+.acc-form .inline-actions .btn { margin-top: 0; }
+.danger-btn { color: var(--danger); box-shadow: inset 0 0 0 1px currentColor; }
+@media (max-width: 640px) {
+  .acc-status, .acc-body { padding-left: 0; }
+}

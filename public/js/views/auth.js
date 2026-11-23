@@ -1,4 +1,4 @@
-/* Connexion (avec double authentification), première configuration et invitation. */
+/* Connexion (avec double authentification), première configuration, invitation, et mot de passe choisi par lien. */
 import { api } from "../api.js";
 import { go, reloadState, route, state, titleHtml } from "../app.js";
 import { errorText, lang, setLang, initialLang, t } from "../i18n.js";
@@ -19,7 +19,7 @@ async function signedIn(mode, back) {
   const s = await reloadState();
   setLang(initialLang(s.user?.lang));
   if (back) location.replace(back);
-  else if (mode === "invite") go("#/");
+  else if (mode === "invite" || mode === "password") go("#/");
   else route();
 }
 
@@ -30,10 +30,14 @@ async function signedIn(mode, back) {
 export async function renderAuth(main, mode, inviteToken, opts = {}) {
   const { back = null, app = null } = opts;
   let inviteValid = true;
+  let link = null;
   if (mode === "invite") {
     inviteValid = await api.post("api/invites/check", { token: inviteToken }).then((r) => r.valid).catch(() => false);
+  } else if (mode === "password") {
+    link = await api.post("api/password-links/check", { token: inviteToken }).catch(() => ({ valid: false }));
+    inviteValid = link.valid;
   }
-  const k = { login: "login", setup: "setup", invite: "invite", "2fa": "twoFactor" }[mode];
+  const k = { login: "login", setup: "setup", invite: "invite", "2fa": "twoFactor", password: link?.activation === false ? "reset" : "activate" }[mode];
 
   let form;
   if (mode === "login") {
@@ -55,6 +59,16 @@ export async function renderAuth(main, mode, inviteToken, opts = {}) {
       ${field({ id: "password", label: t("password"), type: "password", autocomplete: "new-password", hint: t("passwordHint", PASSWORD_MIN), attrs: `required minlength="${PASSWORD_MIN}"` })}
       <p class="error" id="form-error" role="alert" hidden></p>
       <button class="btn signal" type="submit">${esc(t("createAdmin"))}</button>`;
+  } else if (mode === "password" && inviteValid) {
+    form = `
+      <p class="mono kicker">${esc(t("passwordFor", link.email))}</p>
+      <input type="text" name="username" autocomplete="username" value="${esc(link.email)}" hidden>
+      ${field({ id: "password", label: t("password"), type: "password", autocomplete: "new-password", hint: t("passwordHint", PASSWORD_MIN), attrs: `required autofocus minlength="${PASSWORD_MIN}"` })}
+      <p class="error" id="form-error" role="alert" hidden></p>
+      <button class="btn signal" type="submit">${esc(t("activateBtn"))}</button>`;
+  } else if (mode === "password") {
+    form = `<p class="lead">${esc(t("linkInvalid"))}</p>
+      <a class="btn ghost" href="#/" style="margin-top:28px">${esc(t("toLogin"))}</a>`;
   } else if (inviteValid) {
     form = `
       ${field({ id: "name", label: t("name"), autocomplete: "name", attrs: "required autofocus maxlength=\"80\"" })}
@@ -96,6 +110,8 @@ export async function renderAuth(main, mode, inviteToken, opts = {}) {
         await api.post("api/login/2fa", { ticket: opts.ticket, code: data.code });
       } else if (mode === "setup") {
         await api.post("api/setup", { ...data, lang });
+      } else if (mode === "password") {
+        await api.post("api/password-links/accept", { token: inviteToken, password: data.password });
       } else {
         await api.post("api/invites/accept", { ...data, token: inviteToken, lang });
       }

@@ -8,7 +8,7 @@ fournisseur « générique » (Authentik, Keycloak…) n'a besoin d'aucun code e
 L'implémentation de référence est [`examples/demo-app/server.js`](../examples/demo-app/server.js) : un seul fichier, sans framework.
 
 Une fois la connexion unique en place, l'appli peut aussi s'administrer depuis le Board : voir
-[L'admin dans le Board](admin-api.md).
+[L'admin dans le Board](admin-api.md), et laisser le Board gérer ses comptes : voir [Les utilisateurs gérés par le Board](users-api.md).
 
 ## Ce que l'administrateur de l'appli fait
 
@@ -18,7 +18,7 @@ Une fois la connexion unique en place, l'appli peut aussi s'administrer depuis l
    sont déjà remplies selon la convention ci-dessous.
 3. Il colle ces trois valeurs dans la page d'administration de l'appli. C'est tout.
 
-Ensuite, chaque personne qui a l'instance dans son Board peut s'y connecter : le bouton « Ouvrir » du Board
+Ensuite, chaque personne qui a accès à l'instance dans le Board (et chaque administrateur du Board) peut s'y connecter : le bouton « Ouvrir » du Board
 la connecte directement, sans mot de passe propre à l'appli.
 
 ## Convention des applis Kosmy
@@ -64,7 +64,7 @@ L'appli prépare alors une demande d'autorisation :
 
 - Si la personne n'est pas connectée au Board, elle s'y connecte (avec sa double authentification si elle l'a activée),
   puis revient automatiquement.
-- Le Board vérifie qu'elle a, dans son Board, un espace relié à ce client. Sinon : page « Accès refusé »,
+- Le Board vérifie qu'elle a accès à l'instance de ce client (un administrateur du Board a accès à toutes). Sinon : page « Accès refusé »,
   puis retour à l'appli avec `error=access_denied`.
 - Il n'y a pas d'écran de consentement : relier l'espace vaut accord.
 

@@ -34,13 +34,13 @@ Content-Type: application/json
 | `title` | obligatoire | 120 caractères au plus. |
 | `body` | facultatif | 1000 caractères au plus ; les retours à la ligne sont gardés. |
 | `url` | facultatif | Une page **de l'instance** (absolue ou relative à son adresse). Le Board l'ouvre en passant par la connexion unique, pour arriver connecté. Une autre origine est refusée (`400 url`). |
-| `to` | facultatif | Les comptes à prévenir : leurs `sub` (ceux de l'ID token). Sans `to`, toutes les personnes qui ont l'instance reliée dans leur Board. |
+| `to` | facultatif | Les comptes à prévenir : leurs `sub` (ceux de l'ID token). Sans `to`, toutes les personnes qui ont accès à l'instance, et les administrateurs du Board. |
 
 L'authentification est toujours `client_secret_basic`, même si la connexion unique utilise `client_secret_post`.
 
 ### Destinataires
 
-Seules les personnes qui ont, dans leur Board, un espace relié à ce client peuvent recevoir la notification ;
+Seules les personnes qui ont accès à l'instance de ce client (et les administrateurs du Board) peuvent recevoir la notification ;
 `to` ne fait que réduire cette liste (un `sub` inconnu est ignoré). Une notification réservée aux administrateurs
 de l'appli (une nouvelle demande, par exemple) doit donc donner `to` : l'appli sait quels comptes du Board sont
 reliés à ses administrateurs.

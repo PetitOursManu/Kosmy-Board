@@ -6,6 +6,7 @@
  *
  * Réglages : page /settings (comme dans une vraie appli), gardés dans examples/demo-app/settings.json.
  * Admin dans le Board : /api/kosmy-board/admin (docs/admin-api.md), en bas de ce fichier.
+ * Utilisateurs gérés par le Board : /api/kosmy-board/users (docs/users-api.md), tout en bas.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -79,6 +80,7 @@ const redirect = (res, to, headers = {}) => { res.writeHead(303, { Location: to,
 
 function currentUser(req) {
   const s = sessions.get(cookies(req).demo_session);
+  if (s && settings.accounts[s.sub]?.active === false) return null;
   return s || null;
 }
 
@@ -148,10 +150,23 @@ async function callback(req, res, url) {
     return send(res, 400, layout("Erreur", `<p class="err">Nonce invalide.</p>`));
   }
   // Les comptes se relient par « sub » (identifiant stable du Board), jamais par l'e-mail (non vérifié).
-  if (!settings.accounts[payload.sub]) {
+  const access = payload.kosmy_board_access;
+  if (access && typeof access === "object") {
+    // Accès géré par le Board (docs/users-api.md) : mêmes règles qu'un PUT, compte créé s'il n'existe pas encore.
+    try {
+      provision(payload.sub, { name: payload.name, email: payload.email, role: access.role, values: access.values }, { atLogin: true });
+    } catch (e) {
+      if (!(e instanceof AdminError)) throw e;
+      return send(res, 403, layout("Refusé", `<div class="card"><p class="err">${esc(e.userMessage || e.code)}</p></div>`));
+    }
+  } else if (!settings.accounts[payload.sub]) {
     const first = Object.keys(settings.accounts).length === 0;
     settings.accounts[payload.sub] = { name: payload.name || payload.email, email: payload.email, role: first ? "admin" : "member", linkedAt: Date.now() };
     save();
+  }
+  // Un compte désactivé (accès retiré dans le Board) ne se connecte plus.
+  if (settings.accounts[payload.sub]?.active === false) {
+    return send(res, 403, layout("Refusé", `<div class="card"><p class="err">Ce compte est désactivé.</p></div>`));
   }
   const sid = b64url(randomBytes(24));
   sessions.set(sid, { sub: payload.sub, name: payload.name, email: payload.email, at: Date.now() });
@@ -166,6 +181,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/auth/kosmy-board/login") return await startLogin(req, res, url);
     if (url.pathname === "/auth/kosmy-board/callback") return await callback(req, res, url);
     if (url.pathname === ADMIN_PATH || url.pathname.startsWith(`${ADMIN_PATH}/`)) return await boardAdmin(req, res, url);
+    if (url.pathname === USERS_PATH || url.pathname.startsWith(`${USERS_PATH}/`)) return await boardUsers(req, res, url);
 
     if (url.pathname === "/settings") {
       if (req.method === "POST") {
@@ -267,7 +283,7 @@ async function adminAuth(req, url) {
 
   // Le Board dit qui est la personne ; les droits, c'est l'appli qui les donne.
   const account = settings.accounts[payload.sub];
-  if (!account) throw new AdminError(403, "not_linked", "Ce compte Kosmy Board n'est relié à aucun compte de la démo : connectez-vous une fois à la démo avec le Board.");
+  if (!account || account.active === false) throw new AdminError(403, "not_linked", "Ce compte Kosmy Board n'est relié à aucun compte de la démo : connectez-vous une fois à la démo avec le Board.");
   if (account.role !== "admin") throw new AdminError(403, "forbidden", "Votre compte de la démo n'a pas les droits d'administration.");
   return { sub: payload.sub, account };
 }
@@ -426,6 +442,121 @@ async function boardAdmin(req, res, url) {
     try { body = JSON.parse(raw); } catch { throw new AdminError(400, "invalid", "Requête illisible."); }
     const result = act(id, body ?? {}, sub);
     json(res, 200, { ok: true, ...result, section: section(id, sub) });
+  } catch (e) {
+    if (!(e instanceof AdminError)) throw e;
+    json(res, e.status, { error: e.code, ...(e.userMessage ? { message: e.userMessage } : {}) });
+  }
+}
+
+/* ---------- Utilisateurs gérés par le Board (docs/users-api.md) ---------- */
+
+const USERS_PATH = "/api/kosmy-board/users";
+const USERS_PROTOCOL = "kosmy.board-users.v1";
+const SUB = /^[A-Za-z0-9-]{1,64}$/;
+
+/** Les rôles et les restrictions propres à la démo, décrits pour le Board. */
+const USER_ROLES = [
+  { value: "admin", label: "Administrateur", description: "Gère la démo, ses comptes et ses réglages.", admin: true },
+  { value: "member", label: "Membre", description: "Utilise la démo." },
+];
+const USER_FIELDS = [
+  { name: "quota", label: "Projets au plus", type: "number", value: 5, min: 0, max: 100, help: "0 : lecture seule.", roles: ["member"] },
+  { name: "canExport", label: "Peut exporter", type: "checkbox", value: false, roles: ["member"] },
+];
+const defaults = () => Object.fromEntries(USER_FIELDS.map((f) => [f.name, f.value]));
+
+/** Valeurs reçues du Board : chaque champ est revérifié ici ; un champ absent garde sa valeur actuelle. */
+function cleanValues(raw, current) {
+  const out = { ...defaults(), ...current };
+  if (raw == null) return out;
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new AdminError(422, "invalid", "Restrictions illisibles.");
+  for (const f of USER_FIELDS) {
+    if (!(f.name in raw)) continue;
+    const v = raw[f.name];
+    if (f.type === "number") {
+      if (!Number.isInteger(v) || v < f.min || v > f.max) throw new AdminError(422, "invalid", `${f.label} : entre ${f.min} et ${f.max}.`);
+    } else if (f.type === "checkbox" && typeof v !== "boolean") throw new AdminError(422, "invalid", `${f.label} : oui ou non.`);
+    out[f.name] = v;
+  }
+  return out;
+}
+
+const activeAdmins = () => Object.values(settings.accounts).filter((a) => a.role === "admin" && a.active !== false);
+
+/**
+ * Crée, relie ou met à jour le compte de la personne `sub`. Appelée par un PUT du Board,
+ * et à la connexion quand l'ID token porte « kosmy_board_access » (atLogin : jamais de liaison par l'e-mail).
+ * Les comptes de la démo sont rangés par « sub » ; un compte créé dans la démo elle-même aurait une autre clé.
+ */
+function provision(sub, body, { me = null, atLogin = false } = {}) {
+  const fail = (status, message) => { throw new AdminError(status, status === 409 ? "conflict" : "invalid", message); };
+  if (!USER_ROLES.some((r) => r.value === body.role)) fail(422, "Rôle inconnu.");
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 80) : null;
+  const email = typeof body.email === "string" && /^[^\s@]+@[^\s@]+$/.test(body.email.trim()) ? body.email.trim().toLowerCase() : null;
+  const existing = settings.accounts[sub];
+  let a = existing;
+  let status = "updated";
+  if (!a && !atLogin && email) {
+    // Un compte non relié avec la même adresse : on le relie (c'est un administrateur de la démo qui agit).
+    const found = Object.entries(settings.accounts).find(([, x]) => (x.email ?? "").toLowerCase() === email);
+    if (found && found[1].local) {
+      a = found[1];
+      delete settings.accounts[found[0]];
+      status = "linked";
+    } else if (found) fail(409, "Cette adresse e-mail appartient déjà à un autre compte relié.");
+  }
+  if (!a) {
+    a = { name: name || email || "Compte", email, role: body.role, linkedAt: Date.now(), provisioned: true };
+    status = "created";
+  }
+  const losesAdmin = existing && existing.role === "admin" && existing.active !== false && body.role !== "admin";
+  if (losesAdmin && sub === me) fail(409, "Vous ne pouvez pas vous retirer vos propres droits d'administration.");
+  if (losesAdmin && activeAdmins().length <= 1) fail(409, "Il doit rester au moins un administrateur.");
+  const { local, ...rest } = a;
+  settings.accounts[sub] = { ...rest, name: name ?? a.name, email: email ?? a.email, role: body.role, values: cleanValues(body.values, a.values), active: true };
+  save();
+  return { status, account: settings.accounts[sub].email ?? settings.accounts[sub].name };
+}
+
+async function boardUsers(req, res, url) {
+  try {
+    const { sub: me } = await adminAuth(req, url);
+    const target = url.pathname.slice(USERS_PATH.length + 1);
+    if (!target) {
+      if (req.method !== "GET") throw new AdminError(405, "method_not_allowed");
+      return json(res, 200, {
+        protocol: USERS_PROTOCOL,
+        roles: USER_ROLES,
+        defaultRole: "member",
+        fields: USER_FIELDS,
+        users: Object.entries(settings.accounts).filter(([, a]) => !a.local).map(([sub, a]) => ({
+          sub, role: a.role, values: { ...defaults(), ...a.values }, active: a.active !== false, account: a.email ?? a.name,
+        })),
+      });
+    }
+    if (!SUB.test(target)) throw new AdminError(404, "not_found");
+    if (req.method === "PUT") {
+      let raw = "";
+      for await (const c of req) {
+        raw += c;
+        if (raw.length > 100_000) throw new AdminError(413, "too_large");
+      }
+      let body;
+      try { body = JSON.parse(raw); } catch { throw new AdminError(400, "invalid", "Requête illisible."); }
+      const r = provision(target, body ?? {}, { me });
+      return json(res, 200, { ok: true, ...r, message: { created: "Compte créé.", linked: "Compte existant relié.", updated: "Compte mis à jour." }[r.status] });
+    }
+    if (req.method === "DELETE") {
+      const a = settings.accounts[target];
+      if (!a || a.local || a.active === false) return json(res, 200, { ok: true });
+      if (target === me) throw new AdminError(409, "conflict", "Vous ne pouvez pas retirer votre propre accès.");
+      if (a.role === "admin" && activeAdmins().length <= 1) throw new AdminError(409, "conflict", "Il doit rester au moins un administrateur.");
+      a.active = false;
+      for (const [sid, s] of sessions) if (s.sub === target) sessions.delete(sid);
+      save();
+      return json(res, 200, { ok: true, message: "Compte désactivé." });
+    }
+    throw new AdminError(405, "method_not_allowed");
   } catch (e) {
     if (!(e instanceof AdminError)) throw e;
     json(res, e.status, { error: e.code, ...(e.userMessage ? { message: e.userMessage } : {}) });
