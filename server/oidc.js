@@ -120,9 +120,22 @@ export function purgeOidc() {
 
 /* ---------- Droits ---------- */
 
-/** La personne a-t-elle, dans son Board, un espace relié à ce client ? */
-export const userHasClient = (userId, clientId) =>
-  Boolean(db.prepare("SELECT 1 FROM spaces WHERE user_id = ? AND client_id = ?").get(userId, clientId));
+/** La personne a-t-elle accès à l'instance de ce client ? Les administrateurs du Board ont accès à toutes. */
+export const userHasClient = (userId, clientId) => Boolean(db.prepare(
+  `SELECT 1 FROM instances i WHERE i.client_id = $client AND (
+     EXISTS (SELECT 1 FROM users u WHERE u.id = $user AND u.role = 'admin')
+     OR EXISTS (SELECT 1 FROM access a WHERE a.instance_id = i.id AND a.user_id = $user AND a.revoked = 0))`,
+).get({ client: clientId, user: userId }));
+
+/** Rôle et restrictions choisis dans le Board pour cette personne sur cette instance (docs/users-api.md), ou null. */
+export function accessClaim(userId, clientId) {
+  if (!clientId) return null;
+  const r = db.prepare(
+    `SELECT a.role, a.settings FROM access a JOIN instances i ON i.id = a.instance_id
+      WHERE i.client_id = ? AND a.user_id = ? AND a.revoked = 0 AND a.role IS NOT NULL`,
+  ).get(clientId, userId);
+  return r ? { role: r.role, values: JSON.parse(r.settings || "{}") } : null;
+}
 
 /* ---------- Clients MCP (Claude, autres clients MCP) : OAuth pour le serveur MCP du Board ---------- */
 
@@ -209,7 +222,7 @@ export const provider = new Provider(ISSUER, {
   },
   scopes: ["openid", "profile", "email"],
   claims: {
-    openid: ["sub"],
+    openid: ["sub", "kosmy_board_access"],
     profile: ["name", "preferred_username", "locale"],
     email: ["email", "email_verified"],
   },
@@ -220,6 +233,7 @@ export const provider = new Provider(ISSUER, {
   async findAccount(ctx, id) {
     const u = db.prepare("SELECT id, email, name, lang FROM users WHERE id = ?").get(id);
     if (!u) return undefined;
+    const clientId = ctx?.oidc?.client?.clientId;
     return {
       accountId: u.id,
       async claims() {
@@ -231,6 +245,11 @@ export const provider = new Provider(ISSUER, {
           // Le Board ne vérifie pas les adresses e-mail : les applis doivent relier les comptes par « sub ».
           email_verified: false,
           ...(u.lang ? { locale: u.lang } : {}),
+          // Accès géré par le Board : l'appli applique ce rôle et ces restrictions à la connexion.
+          ...(() => {
+            const access = isMcpClientId(clientId) ? null : accessClaim(u.id, clientId);
+            return access ? { kosmy_board_access: access } : {};
+          })(),
         };
       },
     };

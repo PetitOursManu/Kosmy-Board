@@ -4,8 +4,10 @@ Les panneaux d'administration de vos instances auto-hébergées (Kanby, Crafty, 
 C'est l'équivalent web de l'onglet « Admin » de [Kosmy Mobile](https://github.com/PetitOursManu/Kosmy-Mobile),
 avec la même identité visuelle que le site Kosmy.
 
-- **Comptes** : chaque personne a son compte et sa propre liste d'espaces, retrouvée sur tous ses appareils.
-  Le premier compte (administrateur) est créé au premier lancement ; les suivants arrivent par lien d'invitation.
+- **Comptes et accès** : un administrateur du Board crée les comptes et choisit à quelles instances chaque personne a accès,
+  avec, pour chacune, son **rôle et ses restrictions dans l'appli** : le Board crée, met à jour ou désactive le compte
+  dans l'appli lui-même. Un membre ne voit que les instances auxquelles il a accès. Le premier compte (administrateur)
+  est créé au premier lancement.
 - **Espaces** : une appli du catalogue Kosmy (le chemin de sa page d'admin est pré-rempli) ou n'importe quelle autre appli web.
 - **Statut** : « joignable » ou « injoignable », vérifié depuis votre navigateur. C'est une indication, pas un contrôle d'accès.
 - **Connexion unique** : le Board est un fournisseur d'identité OpenID Connect. Une appli reliée
@@ -42,8 +44,7 @@ Avec la connexion unique, il suffit d'être connecté au Board : plus de mot de 
 3. **Ouvrir**, dans le Board, vous connecte directement à l'appli.
 
 - Le Board ne connaît toujours pas les mots de passe des instances : c'est l'appli qui fait confiance au Board.
-- Seules les personnes qui ont l'espace dans leur Board peuvent se connecter à l'instance par le Board.
-  Plusieurs personnes peuvent partager la même instance : elles rejoignent le même client.
+- Seules les personnes qui ont accès à l'instance (et les administrateurs du Board) peuvent s'y connecter par le Board.
 - Se déconnecter du Board coupe les nouvelles connexions aux applis (les sessions déjà ouvertes dans les applis restent ouvertes).
 - L'appli doit savoir se connecter avec OpenID Connect. Pour les applis Kosmy, voir le
   [guide d'intégration](docs/integration.md) ; l'[appli de démonstration](examples/demo-app/server.js) en est l'implémentation de référence.
@@ -67,12 +68,38 @@ Applis Kosmy compatibles : Calendy, ClearDoc, Crafty, Dashy, Kanby, Lumy, Mocky 
 Dans Soundy, chaque personne relie d’abord son compte Emby dans les Réglages (« Relier à Kosmy Board »).
 Pour une autre appli : le [guide de l'admin dans le Board](docs/admin-api.md) décrit le protocole, et l'[appli de démonstration](examples/demo-app/server.js) l'implémente.
 
+## Utilisateurs et accès
+
+Les instances sont **communes au Board** : un administrateur du Board les ajoute, et décide qui y a accès.
+Icône 👥 de l'en-tête (ou **Utilisateurs** sur l'accueil) :
+
+- **Créer un compte** (nom, e-mail, rôle dans le Board) : le Board donne un **lien d'activation** (une seule fois, 7 jours)
+  où la personne choisit son mot de passe. Le lien d'invitation reste possible. Plus tard, **Créer un lien** donne un
+  lien de nouveau mot de passe ; le profil (nom, e-mail, rôle) se change depuis la fiche de la personne.
+- **Accès aux instances** : sur la fiche d'une personne, chaque instance a un interrupteur. Pour une appli qui le permet,
+  on choisit son **rôle** et ses **restrictions** (celles que l'appli propose : quota, lecture seule, accès à l'API…) :
+  le Board **crée son compte dans l'appli** (sans mot de passe : elle s'y connecte par le Board), le met à jour,
+  et le **désactive** quand l'accès est retiré (ses données restent).
+- Un **membre** ne voit que ses instances, sans « Ajouter », « Modifier » ni « Supprimer » ; « Admin » n'apparaît que si
+  son rôle dans l'appli est un rôle d'administration. Un **administrateur du Board** voit et gère toutes les instances.
+- Une appli injoignable au moment du choix : l'accès est gardé, marqué « Pas encore appliqué », et l'appli le reçoit
+  à la prochaine connexion de la personne (revendication `kosmy_board_access` de l'ID token) ou par **Resynchroniser**.
+- Une appli qui ne propose pas encore ce protocole, ou sans connexion unique : l'accès montre l'instance, sans compte géré.
+- Supprimer une personne désactive d'abord ses comptes gérés dans les applis.
+
+Applis compatibles : Calendy, ClearDoc, Crafty, Dashy, Kanby, Lumy, Mocky et Soundy (dans Soundy, les comptes Emby
+doivent d'abord être reliés par la personne). Pour une autre appli : le [guide des utilisateurs gérés par le Board](docs/users-api.md).
+
+**Mise à jour depuis une version précédente** : les espaces personnels deviennent des instances communes (une par adresse)
+et chaque personne garde l'accès à ses anciens espaces (« accès sans compte géré »). Kosmy Mobile continue de fonctionner :
+un membre y retrouve ses instances, et seul un administrateur peut en ajouter.
+
 ## Notifications
 
 Une appli reliée par la connexion unique peut vous envoyer des notifications (Soundy : une nouvelle demande de musique).
 Elles arrivent dans la **cloche** de l'en-tête du Board et, avec Kosmy Mobile, sur votre téléphone.
 
-- Seules les personnes qui ont l'instance reliée dans leur Board peuvent en recevoir ; l'appli choisit parmi elles
+- Seules les personnes qui ont accès à l'instance (et les administrateurs du Board) peuvent en recevoir ; l'appli choisit parmi elles
   (Soundy ne prévient que les comptes reliés à un administrateur de Soundy).
 - Le Board garde les 200 dernières de chaque personne. **Tout marquer comme lu** et **Tout supprimer** sur la page Notifications.
 - Pour une autre appli : le [guide des notifications](docs/notifications.md).

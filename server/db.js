@@ -172,6 +172,84 @@ const MIGRATIONS = [
   );
   CREATE INDEX mcp_tokens_user ON mcp_tokens(user_id);
   `,
+  /*
+   * v6 : les instances deviennent communes au Board (docs/users-api.md). Un administrateur du Board les ajoute
+   * et choisit qui y a accès, avec un rôle et des restrictions propres à chaque appli. Les espaces personnels
+   * d'avant deviennent des instances (une par adresse) et des accès « non gérés » (sans rôle).
+   */
+  (db) => {
+    db.exec(`
+      CREATE TABLE instances (
+        id TEXT PRIMARY KEY,
+        app_id TEXT,
+        name TEXT NOT NULL,
+        base TEXT NOT NULL UNIQUE,
+        path TEXT NOT NULL,
+        client_id TEXT UNIQUE REFERENCES sso_clients(client_id) ON DELETE SET NULL,
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE access (
+        instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT,
+        role_label TEXT,
+        role_admin INTEGER NOT NULL DEFAULT 0,
+        settings TEXT,
+        revoked INTEGER NOT NULL DEFAULT 0,
+        granted_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        granted_at INTEGER NOT NULL,
+        sync_status TEXT,
+        sync_message TEXT,
+        synced_at INTEGER,
+        PRIMARY KEY (instance_id, user_id)
+      );
+      CREATE INDEX access_user ON access(user_id);
+      CREATE TABLE opened (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+        at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, instance_id)
+      );
+      CREATE TABLE password_links (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX password_links_user ON password_links(user_id);
+    `);
+    // Les espaces des administrateurs d'abord : leur nom et leur page d'admin donnent ceux de l'instance.
+    const rows = db.prepare(
+      "SELECT s.*, u.role AS user_role FROM spaces s JOIN users u ON u.id = s.user_id ORDER BY (u.role = 'admin') DESC, s.added_at",
+    ).all();
+    const byBase = new Map();
+    const ids = new Set();
+    const clientOf = db.prepare("SELECT client_id FROM sso_clients WHERE base = ?");
+    const insertInstance = db.prepare(
+      "INSERT INTO instances (id, app_id, name, base, path, client_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    const insertAccess = db.prepare("INSERT OR IGNORE INTO access (instance_id, user_id, granted_at) VALUES (?, ?, ?)");
+    const insertOpened = db.prepare(
+      "INSERT INTO opened (user_id, instance_id, at) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET at = MAX(at, excluded.at)",
+    );
+    for (const r of rows) {
+      let id = byBase.get(r.base);
+      if (!id) {
+        id = r.id;
+        while (ids.has(id)) id = `${r.id}-${ids.size}`;
+        ids.add(id);
+        byBase.set(r.base, id);
+        insertInstance.run(id, r.app_id, r.name, r.base, r.path, clientOf.get(r.base)?.client_id ?? null, r.user_id, r.added_at);
+      }
+      insertAccess.run(id, r.user_id, r.added_at);
+      if (r.opened_at) insertOpened.run(r.user_id, id, r.opened_at);
+    }
+    // Un client sans instance (ne devrait pas exister) : plus rien ne s'y rattache.
+    db.exec("DELETE FROM sso_clients WHERE client_id NOT IN (SELECT client_id FROM instances WHERE client_id IS NOT NULL)");
+    db.exec("DROP TABLE spaces");
+  },
 ];
 
 /** Petites valeurs persistantes (clés de signature, secrets des cookies). */
@@ -184,7 +262,9 @@ const { user_version: version } = db.prepare("PRAGMA user_version").get();
 for (let v = version; v < MIGRATIONS.length; v++) {
   db.exec("BEGIN");
   try {
-    db.exec(MIGRATIONS[v]);
+    const m = MIGRATIONS[v];
+    if (typeof m === "function") m(db);
+    else db.exec(m);
     db.exec(`PRAGMA user_version = ${v + 1}`);
     db.exec("COMMIT");
   } catch (e) {

@@ -28,7 +28,7 @@ function adminError(ex) {
 
 /* ---------- Champs ---------- */
 
-function fieldHtml(f, prefix) {
+export function fieldHtml(f, prefix) {
   const fid = `${prefix}-${f.name}`;
   const common = `id="${esc(fid)}" name="${esc(f.name)}"${f.required ? " required" : ""}${f.readOnly ? " readonly" : ""}${f.placeholder ? ` placeholder="${esc(f.placeholder)}"` : ""}${f.maxLength ? ` maxlength="${f.maxLength}"` : ""}`;
   const help = f.help ? `<span class="hint">${esc(f.help)}</span>` : "";
@@ -52,7 +52,7 @@ function fieldHtml(f, prefix) {
 }
 
 /** Valeurs d'un formulaire, typées comme l'appli les attend (les champs en lecture seule ne partent pas). */
-function readValues(form, fields) {
+export function readValues(form, fields) {
   const values = {};
   for (const f of fields) {
     if (f.readOnly) continue;

@@ -43,8 +43,9 @@ before(async () => {
   spaceId = (await admin.request("POST", "/api/spaces", { name: "Démo", base: DEMO, path: "/admin" })).body.space.id;
   const on = await admin.request("POST", `/api/spaces/${spaceId}/sso`, { redirectUris: [`${DEMO}/auth/kosmy-board/callback`] });
   assert.equal(on.status, 201);
-  memberSpaceId = (await member.request("POST", "/api/spaces", { name: "Démo", base: DEMO, path: "/admin" })).body.space.id;
-  assert.equal((await member.request("POST", `/api/spaces/${memberSpaceId}/sso`, {})).status, 200); // rejoint le client existant
+  // L'admin donne accès à l'instance au membre (sans compte géré : il est déjà relié dans l'appli).
+  assert.equal((await admin.request("PUT", `/api/spaces/${spaceId}/access/${memberId}`, {})).status, 200);
+  memberSpaceId = spaceId;
 
   // L'appli est réglée et les deux comptes y sont déjà reliés (comme après une première connexion par le Board).
   demo = await startDemo({
@@ -135,8 +136,8 @@ test("sans connexion unique, ou appli qui ne connaît pas le protocole", async (
   assert.equal((await admin.request("GET", `/api/spaces/${self}/admin`)).body.error, "admin_unsupported");
 
   // Instance injoignable.
-  const off = (await admin.request("POST", "/api/spaces", { name: "Éteinte", base: "http://localhost:9", path: "/" })).body.space.id;
-  await admin.request("POST", `/api/spaces/${off}/sso`, { redirectUris: ["http://localhost:9/cb"] });
+  const off = (await admin.request("POST", "/api/spaces", { name: "Éteinte", base: "http://localhost:7", path: "/" })).body.space.id;
+  await admin.request("POST", `/api/spaces/${off}/sso`, { redirectUris: ["http://localhost:7/cb"] });
   assert.equal((await admin.request("GET", `/api/spaces/${off}/admin`)).body.error, "admin_unreachable");
 });
 

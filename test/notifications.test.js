@@ -24,12 +24,11 @@ before(async () => {
   const inv = await admin.request("POST", "/api/invites", { role: "member" });
   await member.request("POST", "/api/invites/accept", { token: inv.body.url.split("/").pop(), name: "M", email: "m@x.fr", password: "motdepasse-456" });
   memberId = (await member.request("GET", "/api/state")).body.user.id;
-  // L'admin et le membre ont tous les deux l'instance reliée dans leur Board.
+  // L'admin voit toutes les instances ; il donne accès à celle-ci au membre (accès sans compte géré).
   const sp = await admin.request("POST", "/api/spaces", { appId: "soundy", name: "Soundy", base: APP, path: "/" });
   const on = await admin.request("POST", `/api/spaces/${sp.body.space.id}/sso`, { redirectUris: [`${APP}/auth/kosmy-board/callback`] });
   client = { id: on.body.clientId, secret: on.body.secret };
-  const sp2 = await member.request("POST", "/api/spaces", { appId: "soundy", name: "Musique", base: APP, path: "/" });
-  await member.request("POST", `/api/spaces/${sp2.body.space.id}/sso`, {});
+  assert.equal((await admin.request("PUT", `/api/spaces/${sp.body.space.id}/access/${memberId}`, {})).status, 200);
   const dev = await fetch(`${srv.base}/api/device/login`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email: "a@x.fr", password: "motdepasse-123", device: "Kosmy Mobile · Test" }),
